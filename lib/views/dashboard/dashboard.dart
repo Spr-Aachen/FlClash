@@ -1,21 +1,21 @@
+import 'dart:async';
 import 'dart:math';
 
-import 'package:defer_pointer/defer_pointer.dart';
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/core/core.dart';
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/icons/icons.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/widgets/widgets.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'widget_metrics.dart';
+import 'widget_registry.dart';
 import 'widgets/core_status_button.dart';
 import 'widgets/start_button.dart';
 
 typedef _IsEditWidgetBuilder = Widget Function(bool isEdit);
-
-const _maxCrossAxisCount = 16;
-const _maxGridWidth = 280.0 * _maxCrossAxisCount / 4;
 
 class DashboardView extends ConsumerStatefulWidget {
   const DashboardView({super.key});
@@ -24,15 +24,42 @@ class DashboardView extends ConsumerStatefulWidget {
   ConsumerState<DashboardView> createState() => _DashboardViewState();
 }
 
-class _DashboardViewState extends ConsumerState<DashboardView> {
+class _DashboardViewState extends ConsumerState<DashboardView>
+    with SingleTickerProviderStateMixin {
   final key = GlobalKey<SuperGridState>();
   final _isEditNotifier = ValueNotifier<bool>(false);
   final _addedWidgetsNotifier = ValueNotifier<List<GridItem>>([]);
+  late final _addSheetController = SnapSheetController(vsync: this);
+  int _landingCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.listenManual(
+      dashboardStateProvider.select((state) => state.dashboardWidgets),
+      (_, dashboardWidgets) => _syncAddedWidgets(dashboardWidgets),
+      fireImmediately: true,
+    );
+  }
+
+  void _syncAddedWidgets(List<DashboardWidget> dashboardWidgets) {
+    bool onThisPlatform(DashboardWidget item) =>
+        item.platforms.contains(SupportPlatform.currentPlatform);
+    final shown = dashboardWidgets
+        .where(onThisPlatform)
+        .map((item) => item.widget)
+        .toSet();
+    _addedWidgetsNotifier.value = DashboardWidget.values
+        .where((item) => onThisPlatform(item) && !shown.contains(item.widget))
+        .map((item) => item.widget)
+        .toList();
+  }
 
   @override
   void dispose() {
     _isEditNotifier.dispose();
     _addedWidgetsNotifier.dispose();
+    _addSheetController.dispose();
     super.dispose();
   }
 
@@ -58,22 +85,31 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
             return child!;
           },
           child: IconButton(
+            tooltip: context.appLocalizations.addWidget,
             onPressed: () {
               _showAddWidgetsModal();
             },
-            icon: const Icon(Icons.add_circle),
+            icon: const GlyphIcon(AppGlyphs.addCircle),
           ),
         ),
       FadeRotationScaleBox(
         child: isEdit
             ? IconButton(
+                tooltip: context.appLocalizations.save,
                 key: const ValueKey(true),
-                icon: const Icon(Icons.save, key: ValueKey('save-icon')),
-                onPressed: _handleSaveAndExit,
+                icon: const GlyphIcon(
+                  AppGlyphs.save,
+                  key: ValueKey('save-icon'),
+                ),
+                onPressed: _handleExitEdit,
               )
             : IconButton(
+                tooltip: context.appLocalizations.edit,
                 key: const ValueKey(false),
-                icon: const Icon(Icons.edit, key: ValueKey('edit-icon')),
+                icon: const GlyphIcon(
+                  AppGlyphs.edit,
+                  key: ValueKey('edit-icon'),
+                ),
                 onPressed: _handleEnterEdit,
               ),
       ),
@@ -81,89 +117,62 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   }
 
   void _showAddWidgetsModal() {
-    showSheet(
-      builder: (_) {
+    showSnapSheet(
+      context,
+      detents: const [0.85],
+      collapsedDetent: 0.2,
+      controller: _addSheetController,
+      builder: (sheetContext, scrollController) {
         return ValueListenableBuilder(
           valueListenable: _addedWidgetsNotifier,
           builder: (_, value, _) {
-            return AdaptiveSheetScaffold(
+            return CommonScaffold(
               body: _AddDashboardWidgetModal(
                 items: value,
-                onAdd: (gridItem) {
-                  key.currentState?.handleAdd(gridItem);
-                },
+                scrollController: scrollController,
+                onAdd: (gridItem, from) =>
+                    _addWidget(sheetContext, gridItem, from),
               ),
               title: context.appLocalizations.add,
             );
           },
         );
       },
-      context: context,
+    );
+  }
+
+  void _addWidget(BuildContext sheetContext, GridItem item, Rect from) {
+    final grid = key.currentState;
+    if (grid == null) {
+      return;
+    }
+    final isLast = _addedWidgetsNotifier.value.length <= 1;
+    if (isLast || !_addSheetController.isAttached) {
+      Navigator.of(sheetContext).pop();
+      grid.addItem(item, from: from);
+      return;
+    }
+    _addSheetController.collapse();
+    _landingCount++;
+    unawaited(
+      grid.addItem(item, from: from).whenComplete(() {
+        if (--_landingCount == 0 && mounted) {
+          _addSheetController.restore();
+        }
+      }),
     );
   }
 
   void _handleEnterEdit() {
-    if (_isEditNotifier.value) {
-      return;
-    }
     _isEditNotifier.value = true;
   }
 
   void _handleExitEdit() {
-    if (!_isEditNotifier.value) {
-      return;
-    }
-    final dashboardWidgets = _getDashboardWidgets(key.currentState);
-    if (dashboardWidgets != null) {
-      _saveDashboardWidgets(dashboardWidgets);
-    }
     _isEditNotifier.value = false;
   }
 
-  Future<void> _handleSaveAndExit() async {
-    if (!_isEditNotifier.value) {
-      return;
-    }
-    await _handleSave();
-    if (mounted) {
-      _isEditNotifier.value = false;
-    }
-  }
-
-  Future<void> _handleSave() async {
-    final currentState = key.currentState;
-    if (currentState == null) {
-      return;
-    }
-    if (!mounted || currentState.snapshotChildren.isEmpty) {
-      return;
-    }
-    final transformCompleted = await currentState.isTransformCompleter;
-    if (!transformCompleted ||
-        !mounted ||
-        !currentState.mounted ||
-        !identical(key.currentState, currentState)) {
-      return;
-    }
-    final dashboardWidgets = _getDashboardWidgets(currentState);
-    if (dashboardWidgets == null) {
-      return;
-    }
-    _saveDashboardWidgets(dashboardWidgets);
-  }
-
-  List<DashboardWidget>? _getDashboardWidgets(SuperGridState? currentState) {
-    if (currentState == null) {
-      return null;
-    }
-    final children = currentState.snapshotChildren;
-    if (children.isEmpty) {
-      return null;
-    }
-    return children.map(DashboardWidget.getDashboardWidget).toList();
-  }
-
-  void _saveDashboardWidgets(List<DashboardWidget> dashboardWidgets) {
+  void _saveDashboardWidgets(List<GridItem> items) {
+    final dashboardWidgets = items.map(dashboardWidgetOf).toList();
     ref
         .read(appSettingProvider.notifier)
         .update((state) => state.copyWith(dashboardWidgets: dashboardWidgets));
@@ -172,7 +181,10 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   @override
   Widget build(BuildContext context) {
     final dashboardState = ref.watch(dashboardStateProvider);
-    final spacing = 14.mAp;
+    final hasProfile = ref.watch(
+      profilesProvider.select((state) => state.isNotEmpty),
+    );
+    final spacing = cardSpacing;
     final children = [
       ...dashboardState.dashboardWidgets
           .where(
@@ -180,59 +192,72 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
           )
           .map((item) => item.widget),
     ];
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _addedWidgetsNotifier.value = DashboardWidget.values
-          .where(
-            (item) =>
-                !children.contains(item.widget) &&
-                item.platforms.contains(SupportPlatform.currentPlatform),
-          )
-          .map((item) => item.widget)
-          .toList();
-    });
     return _buildIsEdit(
       (isEdit) => CommonScaffold(
         title: context.appLocalizations.dashboard,
         actions: _buildActions(isEdit),
-        floatingActionButton: const StartButton(),
+        floatingActionButton: hasProfile ? const StartButton() : null,
         body: Align(
           alignment: Alignment.topCenter,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16).copyWith(bottom: 88),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _maxGridWidth),
-                child: LayoutBuilder(
-                  builder: (_, constraints) {
-                    final columns = min(
-                      max(4 * ((constraints.maxWidth / 280).ceil()), 8),
-                      _maxCrossAxisCount,
-                    );
-                    return isEdit
-                        ? BackLayerScope(
-                            onBack: _handleExitEdit,
-                            child: SuperGrid(
-                              key: key,
-                              crossAxisCount: columns,
-                              crossAxisSpacing: spacing,
-                              mainAxisSpacing: spacing,
-                              children: children,
-                              onUpdate: () {
-                                _handleSave();
-                              },
-                            ),
-                          )
-                        : Grid(
-                            crossAxisCount: columns,
-                            crossAxisSpacing: spacing,
-                            mainAxisSpacing: spacing,
-                            children: children,
-                          );
-                  },
-                ),
-              ),
-            ),
+          // SingleChildScrollView snaps a bounce back to its edge whenever a
+          // card's refresh relays it out; a sliver viewport keeps the overscroll.
+          child: ValueListenableBuilder(
+            valueListenable: _addSheetController,
+            builder: (context, sheetHeight, _) {
+              final padding = const EdgeInsets.all(16).copyWith(
+                top: context.contentTopPadding,
+                bottom: 16 + max(BottomInsetScope.of(context), sheetHeight),
+              );
+              return CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: padding,
+                    sliver: SliverToBoxAdapter(
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: dashboardMaxGridWidth,
+                          ),
+                          child: LayoutBuilder(
+                            builder: (_, constraints) {
+                              final band = DashboardGridBand.of(
+                                constraints.maxWidth,
+                              );
+                              final columns = band.columns;
+                              final grid = SuperGrid(
+                                key: key,
+                                editing: isEdit,
+                                crossAxisCount: columns,
+                                crossAxisSpacing: spacing,
+                                mainAxisSpacing: spacing,
+                                onChanged: _saveDashboardWidgets,
+                                revealPadding: padding.copyWith(
+                                  left: 0,
+                                  right: 0,
+                                ),
+                                children: children,
+                              );
+                              return DashboardWidgetMetrics(
+                                unitHeight: dashboardUnitHeight(
+                                  constraints.maxWidth,
+                                ),
+                                child: isEdit
+                                    ? BackLayerScope(
+                                        onBack: _handleExitEdit,
+                                        child: grid,
+                                      )
+                                    : grid,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -240,17 +265,27 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   }
 }
 
+typedef _AddCallback = void Function(GridItem item, Rect from);
+
 class _AddDashboardWidgetModal extends StatelessWidget {
   final List<GridItem> items;
-  final Function(GridItem item) onAdd;
+  final ScrollController? scrollController;
+  final _AddCallback onAdd;
 
-  const _AddDashboardWidgetModal({required this.items, required this.onAdd});
+  const _AddDashboardWidgetModal({
+    required this.items,
+    required this.scrollController,
+    required this.onAdd,
+  });
 
   @override
   Widget build(BuildContext context) {
     return DeferredPointerHandler(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        controller: scrollController,
+        padding: const EdgeInsets.all(
+          16,
+        ).copyWith(top: context.contentTopPadding),
         child: Grid(
           crossAxisCount: 8,
           crossAxisSpacing: 16,
@@ -260,9 +295,7 @@ class _AddDashboardWidgetModal extends StatelessWidget {
                 (item) => item.wrap(
                   builder: (child) {
                     return _AddedContainer(
-                      onAdd: () {
-                        onAdd(item);
-                      },
+                      onAdd: (from) => onAdd(item, from),
                       child: child,
                     );
                   },
@@ -275,35 +308,18 @@ class _AddDashboardWidgetModal extends StatelessWidget {
   }
 }
 
-class _AddedContainer extends StatefulWidget {
+class _AddedContainer extends StatelessWidget {
   final Widget child;
-  final VoidCallback onAdd;
+  final ValueChanged<Rect> onAdd;
 
   const _AddedContainer({required this.child, required this.onAdd});
 
-  @override
-  State<_AddedContainer> createState() => _AddedContainerState();
-}
-
-class _AddedContainerState extends State<_AddedContainer> {
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  void didUpdateWidget(_AddedContainer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.child != widget.child) {}
-  }
-
-  Future<void> _handleAdd() async {
-    widget.onAdd();
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
+  void _handleAdd(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) {
+      return;
+    }
+    onAdd(box.localToGlobal(Offset.zero) & box.size);
   }
 
   @override
@@ -311,19 +327,22 @@ class _AddedContainerState extends State<_AddedContainer> {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        ActivateBox(child: widget.child),
+        ActivateBox(child: child),
         Positioned(
           top: -8,
           right: -8,
           child: DeferPointer(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: IconButton.filled(
-                iconSize: 20,
-                padding: const EdgeInsets.all(2),
-                onPressed: _handleAdd,
-                icon: const Icon(Icons.add),
+            child: ElasticButton(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: IconButton.filled(
+                  tooltip: context.appLocalizations.add,
+                  iconSize: 16,
+                  padding: const EdgeInsets.all(4),
+                  onPressed: () => _handleAdd(context),
+                  icon: const GlyphIcon(AppGlyphs.add, fill: 1),
+                ),
               ),
             ),
           ),

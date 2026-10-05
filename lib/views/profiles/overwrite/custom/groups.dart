@@ -1,20 +1,19 @@
 import 'dart:async';
 
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/features/overwrite/overwrite.dart';
 import 'package:fl_clash/models/models.dart' hide FileInfo;
+import 'package:fl_clash/icons/icons.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
 import 'package:fl_clash/views/profiles/overwrite/custom/proxy_providers.dart';
 import 'package:fl_clash/widgets/widgets.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:smooth_sheets/smooth_sheets.dart';
 
 import 'icon.dart';
 import 'proxies.dart';
-import 'widgets.dart';
 
 class CustomProxyGroupsView extends ConsumerStatefulWidget {
   final int profileId;
@@ -26,151 +25,76 @@ class CustomProxyGroupsView extends ConsumerStatefulWidget {
 }
 
 class _CustomProxyGroupsViewState extends ConsumerState<CustomProxyGroupsView> {
-  late final ScrollController _scrollController;
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollController = ScrollController();
-  }
-
   void _handleReorder(int oldIndex, int newIndex) {
     ref
         .read(proxyGroupsProvider(widget.profileId).notifier)
         .order(oldIndex, newIndex);
   }
 
-  void _handleEditProxyGroup(
-    BuildContext context,
-    ProxyGroup proxyGroup,
-    int index,
-  ) {
-    showSheet(
+  void _handleAddOrUpdate({ProxyGroup? proxyGroup}) {
+    showOverwriteNestedSheet<ProxyGroup>(
       context: context,
-      props: const SheetProps(
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        maxWidth: double.maxFinite,
-      ),
-      builder: (context) {
-        return ProfileIdProvider(
-          profileId: widget.profileId,
-          child: ProviderScope(
-            overrides: [
-              proxyGroupProvider.overrideWithBuild((_, _) => proxyGroup),
-            ],
-            child: const AddOrEditProxyGroupNestedSheet(),
-          ),
-        );
-      },
+      profileId: widget.profileId,
+      overrides: [
+        proxyGroupProvider.overrideWithBuild(
+          (_, _) =>
+              proxyGroup ??
+              const ProxyGroup(id: -1, name: '', type: GroupType.Selector),
+        ),
+      ],
+      currentOf: (ref) => ref.read(proxyGroupProvider),
+      save: _handleSaveProxyGroup,
+      formBuilder: (_) => const EditProxyGroupView(),
     );
   }
 
-  void _handleAdd() {
-    showSheet(
-      context: context,
-      props: const SheetProps(
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        maxWidth: double.maxFinite,
-      ),
-      builder: (context) {
-        return ProfileIdProvider(
-          profileId: widget.profileId,
-          child: ProviderScope(
-            overrides: [
-              proxyGroupProvider.overrideWithBuild(
-                (_, _) => const ProxyGroup(
-                  id: -1,
-                  name: '',
-                  type: GroupType.Selector,
-                ),
-              ),
-            ],
-            child: const AddOrEditProxyGroupNestedSheet(),
-          ),
-        );
-      },
-    );
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
+  void _handleDelete(Set<int> proxyGroupIds) {
+    ref
+        .read(proxyGroupsProvider(widget.profileId).notifier)
+        .delAll(proxyGroupIds);
   }
 
   @override
   Widget build(BuildContext context) {
     final appLocalizations = context.appLocalizations;
-    final proxyGroups = ref
-        .watch(
-          customOverwriteDateProvider(
-            widget.profileId,
-          ).select((state) => VM(state.proxyGroups)),
-        )
-        .a;
-    return CommonScaffold(
+    return OverwriteEditorPage<ProxyGroup, int>(
       title: appLocalizations.proxyGroup,
-      actions: [
-        CommonMinFilledButtonTheme(
-          child: FilledButton(
-            onPressed: _handleAdd,
-            child: Text(appLocalizations.add),
-          ),
-        ),
-        const SizedBox(width: 8),
-      ],
-      body: proxyGroups.isEmpty
-          ? NullStatus(label: appLocalizations.proxyGroupEmpty)
-          : CommonScrollBar(
-              controller: _scrollController,
-              child: ReorderableListView.builder(
-                scrollController: _scrollController,
-                buildDefaultDragHandles: false,
-                padding: const EdgeInsets.symmetric(
-                  vertical: 12,
-                ).copyWith(bottom: 24),
-                itemBuilder: (context, index) {
-                  final proxyGroup = proxyGroups[index];
-                  return _ProxyGroupItem(
-                    key: ValueKey(proxyGroup.id),
-                    profileId: widget.profileId,
-                    proxyGroup: proxyGroup,
-                    total: proxyGroups.length,
-                    index: index,
-                    onPressed: () {
-                      _handleEditProxyGroup(context, proxyGroup, index);
-                    },
-                  );
-                },
-                proxyDecorator: (child, index, animation) {
-                  final proxyGroup = proxyGroups[index];
-                  return commonProxyDecorator(
-                    _ProxyGroupItem(
-                      key: ValueKey(proxyGroup.id),
-                      profileId: widget.profileId,
-                      proxyGroup: proxyGroup,
-                      total: proxyGroups.length,
-                      index: index,
-                      onPressed: () {
-                        _handleEditProxyGroup(context, proxyGroup, index);
-                      },
-                    ),
-                    index,
-                    animation,
-                  );
-                },
-                itemCount: proxyGroups.length,
-                itemExtent:
-                    globalState.measure.bodyLargeHeight +
-                    globalState.measure.bodyMediumHeight +
-                    16,
-                onReorderItem: (oldIndex, newIndex) {
-                  _handleReorder(oldIndex, newIndex);
-                },
-              ),
-            ),
+      selectionEnabled: true,
+      dragFromRow: true,
+      idOf: (proxyGroup) => proxyGroup.id,
+      itemsOf: (ref) {
+        return ref.watch(proxyGroupsProvider(widget.profileId)).value;
+      },
+      itemBuilder:
+          (
+            context,
+            ref,
+            proxyGroup,
+            index,
+            isEditing,
+            isSelected,
+            onToggleSelected,
+          ) {
+            return _ProxyGroupItem(
+              profileId: widget.profileId,
+              proxyGroup: proxyGroup,
+              isEditing: isEditing,
+              isSelected: isSelected,
+              onSelected: onToggleSelected,
+              onPressed: () {
+                _handleAddOrUpdate(proxyGroup: proxyGroup);
+              },
+            );
+          },
+      onReorder: _handleReorder,
+      onAdd: _handleAddOrUpdate,
+      onDelete: _handleDelete,
+      searchFieldsOf: (proxyGroup) => [proxyGroup.name, proxyGroup.type.name],
+      emptyLabel: appLocalizations.proxyGroupEmpty,
+      itemExtent:
+          globalState.measure.bodyLargeHeight +
+          globalState.measure.bodyMediumHeight +
+          16,
     );
   }
 }
@@ -178,89 +102,91 @@ class _CustomProxyGroupsViewState extends ConsumerState<CustomProxyGroupsView> {
 class _ProxyGroupItem extends ConsumerWidget {
   final int profileId;
   final ProxyGroup proxyGroup;
-  final int index;
-  final int total;
+  final bool isEditing;
+  final bool isSelected;
+  final VoidCallback onSelected;
   final VoidCallback onPressed;
 
   const _ProxyGroupItem({
-    super.key,
     required this.profileId,
     required this.proxyGroup,
-    required this.index,
-    required this.total,
+    required this.isEditing,
+    required this.isSelected,
+    required this.onSelected,
     required this.onPressed,
   });
 
   @override
   Widget build(BuildContext context, ref) {
-    final appLocalizations = context.appLocalizations;
-    final isValid = ref.watch(
-      customOverwriteGroupIsValidProvider(profileId, proxyGroup),
-    );
-    final position = ItemPosition.get(index, total);
-    return ItemPositionProvider(
-      position: position,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Consumer(
-          builder: (_, ref, _) {
-            return DecorationListItem(
-              invalid: !isValid,
-              onPressed: onPressed,
-              contentPadding: const EdgeInsets.only(left: 16, right: 0),
-              minVerticalPadding: 8,
-              leading: SizedBox.square(
-                dimension: 32,
-                child: IconTheme.merge(
-                  data: const IconThemeData(size: 32),
-                  child: CommonTargetIcon(src: proxyGroup.icon ?? ''),
-                ),
-              ),
-              title: TooltipText(
-                text: Text(
-                  proxyGroup.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              subtitle: Text(proxyGroup.type.name),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  if (!isValid)
-                    InfoMessageButton(
-                      message: appLocalizations.proxyGroupDetectedAbnormal,
-                    ),
-                  ReorderableDelayedDragStartListener(
-                    index: index,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      color: Colors.transparent,
-                      child: const Icon(Icons.drag_handle),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+    final issues = ref
+        .watch(
+          customOverwriteIssuesProvider(profileId).select(
+            (state) => SelectValue(
+              state.proxyGroups[proxyGroup.id] ?? const <OverwriteIssue>[],
+            ),
+          ),
+        )
+        .value;
+    return DecorationListItem(
+      invalid: issues.isNotEmpty,
+      isSelected: isSelected,
+      onPressed: isEditing ? onSelected : onPressed,
+      contentPadding: const EdgeInsets.only(left: 16),
+      minVerticalPadding: 8,
+      leading: SizedBox.square(
+        dimension: 32,
+        child: IconTheme.merge(
+          data: const IconThemeData(size: 32),
+          child: CommonTargetIcon(src: proxyGroup.icon ?? ''),
         ),
+      ),
+      title: TooltipText(
+        text: Text(
+          proxyGroup.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      subtitle: Text(proxyGroup.type.name),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (issues.isNotEmpty) OverwriteIssueButton(issues: issues),
+          CommonCheckBox(
+            value: isSelected,
+            isCircle: true,
+            onChanged: (_) => onSelected(),
+          ),
+        ],
       ),
     );
   }
 }
 
+/// A missing member is left to the list to flag, since it usually appears when
+/// the profile updates; these the core refuses whatever the profile holds.
+bool _blocksSave(OverwriteIssue issue) => switch (issue) {
+  EmptyNameIssue() ||
+  ReservedNameIssue() ||
+  DuplicateNameIssue() ||
+  NoProxySourceIssue() ||
+  GroupLoopIssue() => true,
+  _ => false,
+};
+
 bool _handleSaveProxyGroup(BuildContext context, WidgetRef ref) {
   final appLocalizations = context.appLocalizations;
   final proxyGroup = ref.read(proxyGroupProvider);
-  if (proxyGroup.name.isEmpty) {
-    globalState.showMessage(
-      message: TextSpan(text: appLocalizations.proxyGroupNameEmpty),
-      cancelable: false,
-    );
+  final profileId = ProfileIdProvider.of(context)!.profileId;
+  final blocking = proxyGroupIssues(
+    proxyGroup,
+    ref.read(customOverwriteDateProvider(profileId)),
+  ).where(_blocksSave).toList();
+  if (blocking.isNotEmpty) {
+    showOverwriteIssues(context, blocking);
     return false;
   }
-  final profileId = ProfileIdProvider.of(context)!.profileId;
   final ProxyGroup newProxyGroup;
   if (proxyGroup.id == -1) {
     newProxyGroup = proxyGroup.copyWith(id: snowflake.id);
@@ -271,7 +197,7 @@ bool _handleSaveProxyGroup(BuildContext context, WidgetRef ref) {
       .read(proxyGroupsProvider(profileId).notifier)
       .put(newProxyGroup);
   if (isRepeat == false) {
-    globalState.showMessage(
+    dialogs.showMessage(
       message: TextSpan(text: appLocalizations.proxyGroupNameDuplicate),
       cancelable: false,
     );
@@ -281,152 +207,19 @@ bool _handleSaveProxyGroup(BuildContext context, WidgetRef ref) {
   }
 }
 
-class AddOrEditProxyGroupNestedSheet extends ConsumerStatefulWidget {
-  const AddOrEditProxyGroupNestedSheet({super.key});
-
-  @override
-  ConsumerState<AddOrEditProxyGroupNestedSheet> createState() =>
-      _AddOrEditProxyGroupNestedSheetState();
-}
-
-class _AddOrEditProxyGroupNestedSheetState
-    extends ConsumerState<AddOrEditProxyGroupNestedSheet> {
-  final GlobalKey<NavigatorState> _nestedNavigatorKey = GlobalKey();
-  late final ProxyGroup _originProxyGroup;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _originProxyGroup = ref.read(proxyGroupProvider);
-    });
-  }
-
-  Future<void> _handleClose() async {
-    final state = _nestedNavigatorKey.currentState;
-    if (state != null && state.canPop()) {
-      final res = await globalState.showMessage(
-        message: TextSpan(text: currentAppLocalizations.confirmExitWindow),
-      );
-      if (res != true) {
-        return;
-      }
-    }
-    if (context.mounted) {
-      _handleExit();
-    }
-  }
-
-  Future<void> _handleExit() async {
-    final proxyGroup = ref.read(proxyGroupProvider);
-    if (_originProxyGroup == proxyGroup) {
-      Navigator.of(context).pop();
-      return;
-    }
-    final res = await globalState.showMessage(
-      message: TextSpan(text: currentAppLocalizations.dataChangedSave),
-    );
-    if (!mounted) {
-      return;
-    }
-    if (res != true) {
-      Navigator.of(context).pop();
-      return;
-    }
-    if (_handleSaveProxyGroup(context, ref)) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  Future<void> _handlePop() async {
-    final state = _nestedNavigatorKey.currentState;
-    if (state != null && state.canPop()) {
-      state.pop();
-    } else {
-      _handleExit();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final nestedNavigator = Navigator(
-      key: _nestedNavigatorKey,
-      onGenerateInitialRoutes: (navigator, initialRoute) {
-        return [
-          PagedSheetRoute(
-            builder: (context) {
-              return const _EditProxyGroupView();
-            },
-          ),
-        ];
-      },
-    );
-    final sheetProvider = SheetProvider.of(context);
-    final fillColor = sheetProvider?.type == SheetType.bottomSheet
-        ? context.colorScheme.surfaceContainerLow
-        : context.colorScheme.surface;
-    return CommonPopScope(
-      onPop: (_) async {
-        _handlePop();
-        return false;
-      },
-      child: sheetProvider!.copyWith(
-        nestedNavigatorPop: ([data]) {
-          Navigator.of(context).pop(data);
-        },
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: () async {
-                  _handleClose();
-                },
-              ),
-            ),
-            SizedBox(
-              width: sheetProvider.type == SheetType.sideSheet ? 400 : null,
-              child: SheetViewport(
-                child: PagedSheetRouteTheme(
-                  data: const PagedSheetRouteThemeData(
-                    transitionsBuilder: fadeAndSlideTransition,
-                    transitionDuration: Duration(milliseconds: 300),
-                  ),
-                  child: PagedSheet(
-                    decoration: MaterialSheetDecoration(
-                      size: SheetSize.stretch,
-                      color: fillColor,
-                      borderRadius: sheetProvider.type == SheetType.bottomSheet
-                          ? const BorderRadius.vertical(
-                              top: Radius.circular(28),
-                            )
-                          : BorderRadius.zero,
-                      clipBehavior: Clip.antiAlias,
-                    ),
-                    navigator: nestedNavigator,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EditProxyGroupView extends ConsumerStatefulWidget {
-  const _EditProxyGroupView();
+class EditProxyGroupView extends ConsumerStatefulWidget {
+  const EditProxyGroupView({super.key});
 
   @override
   ConsumerState createState() => _EditProxyGroupViewState();
 }
 
-class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
+class _EditProxyGroupViewState extends ConsumerState<EditProxyGroupView> {
   Future<void> _showTypeOptions(GroupType type) async {
-    final value = await globalState.showCommonDialog<GroupType>(
+    final value = await dialogs.showCommonDialog<GroupType>(
       child: OptionsDialog<GroupType>(
         title: context.appLocalizations.proxyType,
-        options: GroupType.values,
+        options: GroupType.selectableValues,
         textBuilder: (item) => item.name,
         value: type,
       ),
@@ -437,6 +230,23 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     ref
         .read(proxyGroupProvider.notifier)
         .update((state) => state.copyWith(type: value));
+  }
+
+  Future<void> _showStrategyOptions(LoadBalanceStrategy? strategy) async {
+    final value = await dialogs.showCommonDialog<LoadBalanceStrategy>(
+      child: OptionsDialog<LoadBalanceStrategy>(
+        title: context.appLocalizations.strategy,
+        options: LoadBalanceStrategy.values,
+        textBuilder: (item) => item.value,
+        value: strategy ?? LoadBalanceStrategy.consistentHashing,
+      ),
+    );
+    if (value == null) {
+      return;
+    }
+    ref
+        .read(proxyGroupProvider.notifier)
+        .update((state) => state.copyWith(strategy: value));
   }
 
   Future<void> _showIconEdit(String? icon) async {
@@ -452,35 +262,18 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   }
 
   Widget _buildItem({
-    required Widget title,
+    required String title,
+    TextStyle? titleStyle,
     Widget? trailing,
     final VoidCallback? onPressed,
     bool invalid = false,
   }) {
-    return DecorationListItem(
+    return OverwriteFormRow(
       invalid: invalid,
       onPressed: onPressed,
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        spacing: 16,
-        children: [
-          title,
-          if (trailing != null)
-            Flexible(
-              child: IconTheme(
-                data: IconThemeData(
-                  size: 16.ap,
-                  color: context.colorScheme.onSurface.opacity60,
-                ),
-                child: Container(
-                  alignment: Alignment.centerRight,
-                  height: globalState.measure.bodyLargeHeight + 24,
-                  child: trailing,
-                ),
-              ),
-            ),
-        ],
-      ),
+      title: title,
+      titleStyle: titleStyle,
+      trailing: trailing,
     );
   }
 
@@ -496,29 +289,28 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Widget _buildProvidersItem(bool includeAllProviders, List<String> use) {
+  Widget _buildProvidersItem(
+    bool includeAllProviders,
+    List<String> use,
+    List<OverwriteIssue> issues,
+  ) {
     final appLocalizations = context.appLocalizations;
-    final profileId = ProfileIdProvider.of(context)!.profileId;
+    final invalid = issues.isNotEmpty;
     return Consumer(
       builder: (_, ref, _) {
-        final invalid = !ref.watch(
-          customOverwriteUseIsValidProvider(profileId, use),
-        );
         return _buildItem(
           invalid: invalid,
-          title: Text(appLocalizations.selectProxyProviders),
+          title: appLocalizations.selectProxyProviders,
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             spacing: 2,
             children: [
               invalid
-                  ? InfoMessageButton(
-                      message: appLocalizations.proxyProviderDetectedAbnormal,
-                    )
+                  ? OverwriteIssueButton(issues: issues)
                   : (!includeAllProviders
                         ? _NumberCard(number: use.length)
                         : const _CheckIcon()),
-              const Icon(Icons.arrow_forward_ios),
+              const GlyphIcon(AppGlyphs.chevronForward),
             ],
           ),
           onPressed: _handleToProvidersView,
@@ -530,7 +322,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   Widget _buildFilterItem(String? filter) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.proxyFilter),
+      title: appLocalizations.proxyFilter,
       trailing: TextFormField(
         textAlign: TextAlign.end,
         initialValue: filter,
@@ -548,34 +340,47 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Widget _buildMaxFailedTimesItem(int? maxFailedTimes) {
+  Widget _buildNumberItem({
+    required String title,
+    required int? value,
+    required ProxyGroup Function(ProxyGroup state, int? value) apply,
+    String? suffix,
+  }) {
     final appLocalizations = context.appLocalizations;
-    return _buildItem(
-      title: Text(appLocalizations.maxFailedTimes),
-      trailing: TextFormField(
-        keyboardType: TextInputType.number,
-        inputFormatters: TextInputLimits.digitsOnly(TextInputLimits.number),
-        textAlign: TextAlign.end,
-        initialValue: maxFailedTimes?.toString(),
-        onChanged: (value) {
-          ref
-              .read(proxyGroupProvider.notifier)
-              .update(
-                (state) => state.copyWith(maxFailedTimes: int.tryParse(value)),
-              );
-        },
-        decoration: InputDecoration.collapsed(
-          border: const NoInputBorder(),
-          hintText: appLocalizations.optional,
-        ),
+    final field = TextFormField(
+      keyboardType: TextInputType.number,
+      inputFormatters: TextInputLimits.digitsOnly(TextInputLimits.number),
+      textAlign: TextAlign.end,
+      initialValue: value?.toString(),
+      onChanged: (value) {
+        ref
+            .read(proxyGroupProvider.notifier)
+            .update((state) => apply(state, int.tryParse(value)));
+      },
+      decoration: InputDecoration.collapsed(
+        border: const NoInputBorder(),
+        hintText: appLocalizations.optional,
       ),
+    );
+    return _buildItem(
+      title: title,
+      trailing: suffix == null
+          ? field
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              spacing: 4,
+              children: [
+                Flexible(child: field),
+                Text(suffix, style: context.textTheme.bodyMedium),
+              ],
+            ),
     );
   }
 
   Widget _buildUrlItem(String? url) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.testUrl),
+      title: appLocalizations.testUrl,
       trailing: TextFormField(
         keyboardType: TextInputType.url,
         inputFormatters: TextInputLimits.limit(TextInputLimits.url),
@@ -594,32 +399,20 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Widget _buildIntervalItem(int? interval) {
-    final appLocalizations = context.appLocalizations;
+  Widget _buildStrategyItem(LoadBalanceStrategy? strategy) {
     return _buildItem(
-      title: Text(appLocalizations.testInterval),
-      trailing: TextFormField(
-        keyboardType: TextInputType.number,
-        inputFormatters: TextInputLimits.digitsOnly(TextInputLimits.interval),
-        textAlign: TextAlign.end,
-        initialValue: interval?.toString(),
-        onChanged: (value) {
-          ref
-              .read(proxyGroupProvider.notifier)
-              .update((state) => state.copyWith(interval: int.tryParse(value)));
-        },
-        decoration: InputDecoration.collapsed(
-          border: const NoInputBorder(),
-          hintText: appLocalizations.optional,
-        ),
-      ),
+      title: context.appLocalizations.strategy,
+      onPressed: () {
+        _showStrategyOptions(strategy);
+      },
+      trailing: Text((strategy ?? LoadBalanceStrategy.consistentHashing).value),
     );
   }
 
   Widget _buildExcludeFilterItem(String? excludeFilter) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.excludeProxyFilter),
+      title: appLocalizations.excludeProxyFilter,
       trailing: TextFormField(
         textAlign: TextAlign.end,
         initialValue: excludeFilter,
@@ -640,7 +433,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   Widget _buildExcludeTypeItem(String? type) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.excludeType),
+      title: appLocalizations.excludeType,
       trailing: TextFormField(
         textAlign: TextAlign.end,
         initialValue: type,
@@ -661,7 +454,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   Widget _buildExpectedStatusItem(String? expectedStatus) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.expectedStatus),
+      title: appLocalizations.expectedStatus,
       trailing: TextFormField(
         textAlign: TextAlign.end,
         initialValue: expectedStatus,
@@ -679,29 +472,28 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Widget _buildProxiesItem(bool includeAllProxies, List<String> proxies) {
+  Widget _buildProxiesItem(
+    bool includeAllProxies,
+    List<String> proxies,
+    List<OverwriteIssue> issues,
+  ) {
     final appLocalizations = context.appLocalizations;
-    final profileId = ProfileIdProvider.of(context)!.profileId;
+    final invalid = issues.isNotEmpty;
     return Consumer(
       builder: (_, ref, _) {
-        final invalid = !ref.watch(
-          customOverwriteProxiesIsValidProvider(profileId, proxies),
-        );
         return _buildItem(
           invalid: invalid,
-          title: Text(appLocalizations.selectProxies),
+          title: appLocalizations.selectProxies,
           trailing: Row(
             spacing: 2,
             mainAxisSize: MainAxisSize.min,
             children: [
               invalid
-                  ? InfoMessageButton(
-                      message: appLocalizations.proxyDetectedAbnormal,
-                    )
+                  ? OverwriteIssueButton(issues: issues)
                   : (!includeAllProxies
                         ? _NumberCard(number: proxies.length)
                         : const _CheckIcon()),
-              const Icon(Icons.arrow_forward_ios),
+              const GlyphIcon(AppGlyphs.chevronForward),
             ],
           ),
           onPressed: _handleToProxiesView,
@@ -713,7 +505,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   Widget _buildTypeItem(GroupType type) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.proxyType),
+      title: appLocalizations.proxyType,
       onPressed: () {
         _showTypeOptions(type);
       },
@@ -724,7 +516,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   Widget _buildIconItem(String? icon) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.icon),
+      title: appLocalizations.icon,
       onPressed: () {
         _showIconEdit(icon);
       },
@@ -741,10 +533,11 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Widget _buildNameItem(String name) {
+  Widget _buildNameItem(String name, {bool invalid = false}) {
     final appLocalizations = context.appLocalizations;
     return _buildItem(
-      title: Text(appLocalizations.name),
+      invalid: invalid,
+      title: appLocalizations.name,
       trailing: TextFormField(
         initialValue: name,
         keyboardType: TextInputType.name,
@@ -775,7 +568,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     }
 
     return _buildItem(
-      title: Text(appLocalizations.hideFromList),
+      title: appLocalizations.hideFromList,
       onPressed: handleChangeHidden,
       trailing: Switch(
         value: hidden ?? false,
@@ -788,17 +581,19 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
 
   Widget _buildLazyItem(bool? lazy) {
     final appLocalizations = context.appLocalizations;
+    // The core defaults lazy to true, so an untouched group already tests lazily.
+    final value = lazy ?? true;
     void handleChangeLazy() {
       ref
           .read(proxyGroupProvider.notifier)
-          .update((state) => state.copyWith(lazy: !(lazy ?? false)));
+          .update((state) => state.copyWith(lazy: !value));
     }
 
     return _buildItem(
-      title: Text(appLocalizations.testWhenUsed),
+      title: appLocalizations.testWhenUsed,
       onPressed: handleChangeLazy,
       trailing: Switch(
-        value: lazy ?? false,
+        value: value,
         onChanged: (_) {
           handleChangeLazy();
         },
@@ -817,7 +612,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     }
 
     return _buildItem(
-      title: Text(appLocalizations.disableUDP),
+      title: appLocalizations.disableUDP,
       onPressed: handleChangeDisableUDP,
       trailing: Switch(
         value: disableUDP ?? false,
@@ -828,12 +623,23 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
     );
   }
 
-  Future<void> _handleDelete(int profileId, String name) async {
-    final res = await globalState.showMessage(
+  Widget _field<S>(
+    S Function(ProxyGroup state) selector,
+    Widget Function(S value) builder,
+  ) {
+    return Consumer(
+      builder: (_, ref, _) =>
+          builder(ref.watch(proxyGroupProvider.select(selector))),
+    );
+  }
+
+  Future<void> _handleDelete(int profileId) async {
+    final res = await dialogs.showMessage(
       message: TextSpan(text: context.appLocalizations.confirmDeleteProxyGroup),
     );
     if (res == true && mounted) {
-      ref.read(proxyGroupsProvider(profileId).notifier).del(name);
+      final id = ref.read(proxyGroupProvider).id;
+      ref.read(proxyGroupsProvider(profileId).notifier).delAll([id]);
       context.safeNestedPop();
     }
   }
@@ -847,72 +653,140 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
   @override
   Widget build(BuildContext context) {
     final appLocalizations = context.appLocalizations;
-    final isBottomSheet =
-        SheetProvider.of(context)?.type == SheetType.bottomSheet;
     final profileId = ProfileIdProvider.of(context)!.profileId;
-    final proxyGroup = ref.watch(proxyGroupProvider);
-    final height = isBottomSheet
-        ? globalState.container.read(viewSizeProvider).height * 0.65
-        : double.maxFinite;
-    return AdaptiveSheetScaffold(
-      sheetTransparentToolBar: true,
-      actions: [IconButtonData(icon: Icons.check, onPressed: _handleSave)],
+    final id = ref.watch(proxyGroupProvider.select((state) => state.id));
+    final type = ref.watch(proxyGroupProvider.select((state) => state.type));
+    final overwrite = ref.watch(customOverwriteDateProvider(profileId));
+    final issues = ref
+        .watch(
+          proxyGroupProvider.select(
+            (state) => SelectValue(proxyGroupIssues(state, overwrite)),
+          ),
+        )
+        .value;
+    final nameInvalid = issues.any(
+      (issue) =>
+          issue is EmptyNameIssue ||
+          issue is ReservedNameIssue ||
+          issue is DuplicateNameIssue,
+    );
+    final proxiesIssues = issues.whereType<MissingProxiesIssue>().toList();
+    final providersIssues = issues.whereType<MissingProvidersIssue>().toList();
+    final height = ref.sheetHeight(context, 0.65);
+    return CommonScaffold(
+      actions: [
+        AppBarActionButton(
+          data: IconButtonData(
+            glyph: AppGlyphs.check,
+            onPressed: _handleSave,
+            tooltip: context.appLocalizations.save,
+          ),
+        ),
+      ],
       body: SizedBox(
         height: height,
         child: ListView(
           padding: const EdgeInsets.symmetric(
             horizontal: 16,
-          ).copyWith(bottom: 20, top: context.sheetTopPadding),
+          ).copyWith(bottom: 20, top: context.contentTopPadding),
           children: [
+            OverwriteIssuesBanner(issues: issues),
             generateSectionV3(
               title: appLocalizations.general,
               items: [
-                _buildNameItem(proxyGroup.name),
-                _buildTypeItem(proxyGroup.type),
-                _buildIconItem(proxyGroup.icon),
-                _buildHiddenItem(proxyGroup.hidden),
-                _buildDisableUDPItem(proxyGroup.disableUDP),
+                _field(
+                  (state) => state.name,
+                  (value) => _buildNameItem(value, invalid: nameInvalid),
+                ),
+                _field((state) => state.type, _buildTypeItem),
+                _field((state) => state.icon, _buildIconItem),
+                _field((state) => state.hidden, _buildHiddenItem),
+                _field((state) => state.disableUDP, _buildDisableUDPItem),
               ],
             ),
             generateSectionV3(
               title: appLocalizations.proxies,
               items: [
-                _buildProxiesItem(
-                  proxyGroup.includeAllProxies ?? false,
-                  proxyGroup.proxies ?? [],
+                _field(
+                  (state) => (
+                    state.includeAllProxies ?? false,
+                    state.proxies ?? const <String>[],
+                  ),
+                  (value) =>
+                      _buildProxiesItem(value.$1, value.$2, proxiesIssues),
                 ),
-                _buildProvidersItem(
-                  proxyGroup.includeAllProviders ?? false,
-                  proxyGroup.use ?? [],
+                _field(
+                  (state) => (
+                    state.includeAllProviders ?? false,
+                    state.use ?? const <String>[],
+                  ),
+                  (value) =>
+                      _buildProvidersItem(value.$1, value.$2, providersIssues),
                 ),
-                _buildFilterItem(proxyGroup.filter),
-                _buildExcludeFilterItem(proxyGroup.excludeFilter),
-                _buildExcludeTypeItem(proxyGroup.excludeType),
-                _buildExpectedStatusItem(proxyGroup.expectedStatus),
+                _field((state) => state.filter, _buildFilterItem),
+                _field((state) => state.excludeFilter, _buildExcludeFilterItem),
+                _field((state) => state.excludeType, _buildExcludeTypeItem),
+                _field(
+                  (state) => state.expectedStatus,
+                  _buildExpectedStatusItem,
+                ),
               ],
             ),
             generateSectionV3(
               title: appLocalizations.other,
               items: [
-                _buildUrlItem(proxyGroup.url),
-                _buildMaxFailedTimesItem(proxyGroup.maxFailedTimes),
-                _buildLazyItem(proxyGroup.lazy),
-                _buildIntervalItem(proxyGroup.interval),
+                _field((state) => state.url, _buildUrlItem),
+                _field(
+                  (state) => state.interval,
+                  (value) => _buildNumberItem(
+                    title: appLocalizations.testInterval,
+                    value: value,
+                    suffix: 's',
+                    apply: (state, value) => state.copyWith(interval: value),
+                  ),
+                ),
+                _field(
+                  (state) => state.timeout,
+                  (value) => _buildNumberItem(
+                    title: appLocalizations.timeout,
+                    value: value,
+                    suffix: 'ms',
+                    apply: (state, value) => state.copyWith(timeout: value),
+                  ),
+                ),
+                _field(
+                  (state) => state.maxFailedTimes,
+                  (value) => _buildNumberItem(
+                    title: appLocalizations.maxFailedTimes,
+                    value: value,
+                    apply: (state, value) =>
+                        state.copyWith(maxFailedTimes: value),
+                  ),
+                ),
+                _field((state) => state.lazy, _buildLazyItem),
+                if (type == GroupType.URLTest)
+                  _field(
+                    (state) => state.tolerance,
+                    (value) => _buildNumberItem(
+                      title: appLocalizations.tolerance,
+                      value: value,
+                      suffix: 'ms',
+                      apply: (state, value) => state.copyWith(tolerance: value),
+                    ),
+                  ),
+                if (type == GroupType.LoadBalance)
+                  _field((state) => state.strategy, _buildStrategyItem),
               ],
             ),
             generateSectionV3(
               title: appLocalizations.action,
               items: [
-                if (proxyGroup.id != -1)
+                if (id != -1)
                   _buildItem(
-                    title: Text(
-                      appLocalizations.delete,
-                      style: context.textTheme.bodyLarge?.copyWith(
-                        color: context.colorScheme.error,
-                      ),
-                    ),
+                    title: appLocalizations.delete,
+                    titleStyle: TextStyle(color: context.colorScheme.error),
                     onPressed: () {
-                      _handleDelete(profileId, proxyGroup.name);
+                      _handleDelete(profileId);
                     },
                   ),
               ],
@@ -920,7 +794,7 @@ class _EditProxyGroupViewState extends ConsumerState<_EditProxyGroupView> {
           ],
         ),
       ),
-      title: proxyGroup.id == -1
+      title: id == -1
           ? appLocalizations.addProxyGroup
           : appLocalizations.editProxyGroup,
     );
@@ -934,10 +808,10 @@ class _CheckIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(6),
-      child: Icon(
-        Icons.check_circle_outline,
+      child: GlyphIcon(
+        AppGlyphs.checkCircle,
         size: 20.ap,
-        color: Colors.greenAccent.harmonizeWith(context.colorScheme.primary),
+        color: context.colorScheme.success,
       ),
     );
   }
@@ -952,7 +826,7 @@ class _NumberCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: AppShape.md,
       child: Container(
         constraints: const BoxConstraints(minWidth: 32),
         alignment: Alignment.center,

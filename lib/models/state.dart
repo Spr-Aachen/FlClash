@@ -1,6 +1,6 @@
 import 'package:collection/collection.dart';
 import 'package:fl_clash/enum/enum.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import 'app.dart';
@@ -14,28 +14,8 @@ part 'generated/state.freezed.dart';
 part 'generated/state.g.dart';
 
 @freezed
-abstract class VM<A> with _$VM<A> {
-  const factory VM(A a) = _VM;
-}
-
-@freezed
-abstract class VM2<A, B> with _$VM2<A, B> {
-  const factory VM2(A a, B b) = _VM2;
-}
-
-@freezed
-abstract class VM3<A, B, C> with _$VM3<A, B, C> {
-  const factory VM3(A a, B b, C c) = _VM3;
-}
-
-@freezed
-abstract class VM4<A, B, C, D> with _$VM4<A, B, C, D> {
-  const factory VM4(A a, B b, C c, D d) = _VM4;
-}
-
-@freezed
-abstract class VM5<A, B, C, D, E> with _$VM5<A, B, C, D, E> {
-  const factory VM5(A a, B b, C c, D d, E e) = _VM5;
+abstract class SelectValue<T> with _$SelectValue<T> {
+  const factory SelectValue(T value) = _SelectValue;
 }
 
 @freezed
@@ -56,6 +36,7 @@ abstract class CommonMessage with _$CommonMessage {
   const factory CommonMessage({
     required String id,
     required String text,
+    @Default(MessageLevel.info) MessageLevel level,
     @Default(Duration(seconds: 3)) Duration duration,
     MessageActionState? actionState,
   }) = _CommonMessage;
@@ -72,7 +53,6 @@ abstract class MessageActionState with _$MessageActionState {
 @freezed
 abstract class AppBarState with _$AppBarState {
   const factory AppBarState({
-    @Default([]) List<Widget> actions,
     AppBarSearchState? searchState,
     AppBarEditState? editState,
   }) = _AppBarState;
@@ -82,7 +62,6 @@ abstract class AppBarState with _$AppBarState {
 abstract class AppBarSearchState with _$AppBarSearchState {
   const factory AppBarSearchState({
     required Function(String) onSearch,
-    @Default(true) bool autoAddSearch,
     @Default(null) String? query,
   }) = _AppBarSearchState;
 }
@@ -112,14 +91,6 @@ abstract class ProfilesState with _$ProfilesState {
 }
 
 @freezed
-abstract class NetworkDetectionState with _$NetworkDetectionState {
-  const factory NetworkDetectionState({
-    required bool isLoading,
-    required IpInfo? ipInfo,
-  }) = _NetworkDetectionState;
-}
-
-@freezed
 abstract class TrayState with _$TrayState {
   const factory TrayState({
     required Mode mode,
@@ -128,11 +99,11 @@ abstract class TrayState with _$TrayState {
     required bool systemProxy,
     required bool tunEnable,
     required bool isStart,
-    required String? locale,
-    required Brightness? brightness,
     required List<Group> groups,
     required Map<String, String> selectedMap,
     required bool showTrayTitle,
+    required bool safeMode,
+    @Default({}) Map<HotAction, HotKeyAction> hotKeys,
   }) = _TrayState;
 }
 
@@ -182,6 +153,14 @@ abstract class ProxiesTabState with _$ProxiesTabState {
     required String? currentGroupName,
     required ProxyCardType proxyCardType,
   }) = _ProxiesTabState;
+}
+
+@freezed
+abstract class ProxiesTabControllerState with _$ProxiesTabControllerState {
+  const factory ProxiesTabControllerState({
+    required List<String> groupNames,
+    required String? currentGroupName,
+  }) = _ProxiesTabControllerState;
 }
 
 @freezed
@@ -272,6 +251,32 @@ abstract class ProxyState with _$ProxyState {
 }
 
 @freezed
+abstract class ThemeColorsSelectorState with _$ThemeColorsSelectorState {
+  const factory ThemeColorsSelectorState({
+    required int? primaryColor,
+    required List<int> primaryColors,
+    required DynamicSchemeVariant schemeVariant,
+    required bool isDefault,
+  }) = _ThemeColorsSelectorState;
+}
+
+@freezed
+abstract class SystemProxySelectorState with _$SystemProxySelectorState {
+  const factory SystemProxySelectorState({
+    required bool systemProxy,
+    required List<String> bypassDomain,
+  }) = _SystemProxySelectorState;
+}
+
+@freezed
+abstract class CurrentProfileSelectorState with _$CurrentProfileSelectorState {
+  const factory CurrentProfileSelectorState({
+    required String label,
+    required Map<String, String> selectedMap,
+  }) = _CurrentProfileSelectorState;
+}
+
+@freezed
 abstract class DashboardState with _$DashboardState {
   const factory DashboardState({
     required List<DashboardWidget> dashboardWidgets,
@@ -302,9 +307,11 @@ abstract class SharedState with _$SharedState {
     VpnOptions? vpnOptions,
     required String stopTip,
     required String startTip,
+    required String localNetworkTip,
     required String currentProfileName,
     required String stopText,
     required bool onlyStatisticsProxy,
+    @Default(true) bool showStopAction,
     required bool crashlytics,
   }) = _SharedState;
 
@@ -335,11 +342,18 @@ abstract class MakeRealProfileState with _$MakeRealProfileState {
     required Map<String, dynamic> rawConfig,
     required PatchClashConfig realPatchConfig,
     required bool overrideDns,
+    required bool overrideNtp,
     required bool appendSystemDns,
     required List<ProxyGroup> proxyGroups,
     required List<Rule> rules,
     required List<Rule> addedRules,
     required String defaultUA,
+    @Default([]) List<CustomProxy> proxies,
+    @Default([]) List<String> authentication,
+    @Default({}) Map<String, dynamic> injectedProxyProviders,
+    @Default({}) Map<String, dynamic> injectedRuleProviders,
+    String? matchTarget,
+    @Default(false) bool safeMode,
   }) = _MakeRealProfileState;
 }
 
@@ -352,6 +366,8 @@ abstract class MigrationData with _$MigrationData {
     @Default([]) List<Profile> profiles,
     @Default([]) List<ProfileRuleLink> links,
     @Default([]) List<ProxyGroup> proxyGroups,
+    @Default([]) List<ClashProvider> clashProviders,
+    @Default([]) List<CustomProxy> customProxies,
   }) = _MigrationData;
 }
 
@@ -365,7 +381,12 @@ abstract class SetupState with _$SetupState {
     required List<ProxyGroup> proxyGroups,
     required List<Rule> addedRules,
     required Script? script,
+    @Default([]) List<CustomProxy> customProxies,
     required bool overrideDns,
     required Dns dns,
+    required Set<DnsOverrideKey> dnsOverrideKeys,
+    @Default([]) List<ClashProvider> clashProviders,
+    @Default({}) Map<String, int> profileProviders,
+    String? matchTarget,
   }) = _SetupState;
 }

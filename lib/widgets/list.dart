@@ -1,17 +1,17 @@
 import 'package:collection/collection.dart';
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
-import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/state.dart';
 import 'package:fl_clash/widgets/inherited.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'card.dart';
 import 'input.dart';
 import 'open_container.dart';
 import 'scaffold.dart';
 import 'sheet.dart';
+
+part 'list_selected.dart';
 
 sealed class _ListItemAction {
   const _ListItemAction();
@@ -44,26 +44,22 @@ final class _CheckboxAction extends _ListItemAction {
 
 final class _OpenAction extends _ListItemAction {
   final Widget widget;
-  final double? maxWidth;
-  final bool blur;
-  final bool forceFull;
   final ValueChanged<dynamic>? onChanged;
+
+  final bool forceFull;
 
   const _OpenAction({
     required this.widget,
-    this.maxWidth,
-    required this.blur,
-    required this.forceFull,
     this.onChanged,
+    required this.forceFull,
   });
 }
 
 final class _NextAction extends _ListItemAction {
   final Widget widget;
   final double? maxWidth;
-  final bool blur;
 
-  const _NextAction({required this.widget, this.maxWidth, required this.blur});
+  const _NextAction({required this.widget, this.maxWidth});
 }
 
 final class _OptionsAction<T> extends _ListItemAction {
@@ -149,10 +145,8 @@ class ListItem<T> extends StatelessWidget {
     this.padding = const EdgeInsets.symmetric(horizontal: 16),
     this.trailing,
     required Widget widget,
-    double? maxWidth,
-    bool blur = true,
-    bool forceFull = true,
     ValueChanged<dynamic>? onChanged,
+    bool forceFull = true,
     this.horizontalTitleGap,
     this.dense,
     this.titleTextStyle,
@@ -164,10 +158,8 @@ class ListItem<T> extends StatelessWidget {
     this.tileTitleAlignment = ListTileTitleAlignment.center,
   }) : _action = _OpenAction(
          widget: widget,
-         maxWidth: maxWidth,
-         blur: blur,
-         forceFull: forceFull,
          onChanged: onChanged,
+         forceFull: forceFull,
        ),
        onTap = null;
 
@@ -180,7 +172,6 @@ class ListItem<T> extends StatelessWidget {
     this.trailing,
     required Widget widget,
     double? maxWidth,
-    bool blur = true,
     this.horizontalTitleGap,
     this.dense,
     this.titleTextStyle,
@@ -190,7 +181,7 @@ class ListItem<T> extends StatelessWidget {
     this.visualDensity,
     this.minVerticalPadding = 12,
     this.tileTitleAlignment = ListTileTitleAlignment.center,
-  }) : _action = _NextAction(widget: widget, maxWidth: maxWidth, blur: blur),
+  }) : _action = _NextAction(widget: widget, maxWidth: maxWidth),
        onTap = null;
 
   ListItem.options({
@@ -323,10 +314,26 @@ class ListItem<T> extends StatelessWidget {
        onTap = null;
 
   Widget _buildListTile({
+    required ItemPosition? position,
     void Function()? onTap,
     Widget? trailing,
     Widget? leading,
   }) {
+    if (position != null) {
+      // OpenContainer reparents the closed tile out of the section's provider.
+      return ItemPositionProvider(
+        position: position,
+        child: DecorationListItem(
+          leading: leading ?? this.leading,
+          title: title,
+          subtitle: subtitle,
+          trailing: trailing ?? this.trailing,
+          contentPadding: padding,
+          horizontalTitleGap: horizontalTitleGap,
+          onPressed: onTap,
+        ),
+      );
+    }
     return ListTile(
       key: key,
       dense: dense,
@@ -349,35 +356,27 @@ class ListItem<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final position = ItemPositionProvider.of(context)?.position;
     switch (_action) {
       case final _OpenAction openDelegate:
         final child = openDelegate.widget;
         final onChanged = openDelegate.onChanged;
+        if (!context.isMobileView) {
+          return _buildListTile(
+            position: position,
+            onTap: () async {
+              final result = await showExtend<dynamic>(
+                context,
+                props: ExtendProps(forceFull: openDelegate.forceFull),
+                builder: (_) => child,
+              );
+              onChanged?.call(result);
+            },
+          );
+        }
         return OpenContainer<dynamic>(
           closedBuilder: (context, action) {
-            Future<void> openAction() async {
-              final isMobile = globalState.container.read(isMobileViewProvider);
-              if (!isMobile || kDebugMode) {
-                final res = await showExtend(
-                  context,
-                  props: ExtendProps(
-                    blur: openDelegate.blur,
-                    maxWidth: openDelegate.maxWidth,
-                    forceFull: openDelegate.forceFull,
-                  ),
-                  builder: (_) {
-                    return child;
-                  },
-                );
-                if (onChanged != null) {
-                  onChanged(res);
-                }
-                return;
-              }
-              action();
-            }
-
-            return _buildListTile(onTap: openAction);
+            return _buildListTile(position: position, onTap: action);
           },
           onClosed: onChanged,
           openBuilder: (_, action) {
@@ -388,13 +387,11 @@ class ListItem<T> extends StatelessWidget {
         final child = nextDelegate.widget;
 
         return _buildListTile(
+          position: position,
           onTap: () {
             showExtend(
               context,
-              props: ExtendProps(
-                blur: nextDelegate.blur,
-                maxWidth: nextDelegate.maxWidth,
-              ),
+              props: ExtendProps(maxWidth: nextDelegate.maxWidth),
               builder: (_) {
                 return child;
               },
@@ -404,22 +401,31 @@ class ListItem<T> extends StatelessWidget {
       case final _OptionsAction options:
         final optionsDelegate = options as _OptionsAction<T>;
         return _buildListTile(
+          position: position,
           onTap: () async {
-            final value = await globalState.showCommonDialog<T>(
-              child: OptionsDialog<T>(
+            // Options are boxed so that a nullable option such as the default
+            // locale stays distinct from the null a dismissed dialog returns.
+            final selected = await dialogs.showCommonDialog<(T,)>(
+              child: OptionsDialog<(T,)>(
                 title: optionsDelegate.title,
-                options: optionsDelegate.options,
-                textBuilder: optionsDelegate.textBuilder,
-                value: optionsDelegate.value,
+                options: [
+                  for (final option in optionsDelegate.options) (option,),
+                ],
+                textBuilder: (option) => optionsDelegate.textBuilder(option.$1),
+                value: (optionsDelegate.value,),
               ),
             );
-            optionsDelegate.onChanged(value);
+            if (selected == null) {
+              return;
+            }
+            optionsDelegate.onChanged(selected.$1);
           },
         );
       case final _InputAction inputDelegate:
         return _buildListTile(
+          position: position,
           onTap: () async {
-            final value = await globalState.showCommonDialog<String>(
+            final value = await dialogs.showCommonDialog<String>(
               child: InputDialog(
                 title: inputDelegate.title,
                 value: inputDelegate.value,
@@ -437,6 +443,7 @@ class ListItem<T> extends StatelessWidget {
         );
       case final _CheckboxAction checkboxDelegate:
         return _buildListTile(
+          position: position,
           onTap: checkboxDelegate.onChanged == null
               ? null
               : () {
@@ -449,6 +456,7 @@ class ListItem<T> extends StatelessWidget {
         );
       case final _ToggleAction toggleAction:
         return _buildListTile(
+          position: position,
           onTap: toggleAction.onChanged == null
               ? null
               : () {
@@ -462,17 +470,20 @@ class ListItem<T> extends StatelessWidget {
       case final _RadioAction radio:
         final radioDelegate = radio as _RadioAction<T>;
         return _buildListTile(
+          position: position,
           onTap: radioDelegate.onTap,
-          leading: Radio<T>(
-            visualDensity: VisualDensity.compact,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            value: radioDelegate.value,
-            toggleable: true,
+          leading: ExcludeFocus(
+            child: Radio<T>(
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              value: radioDelegate.value,
+              toggleable: true,
+            ),
           ),
           trailing: trailing,
         );
       case _DefaultAction():
-        return _buildListTile(onTap: onTap);
+        return _buildListTile(position: position, onTap: onTap);
     }
   }
 }
@@ -501,7 +512,7 @@ class ListHeader extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.max,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        spacing: 36,
+        spacing: actions.isEmpty ? 0 : 12,
         children: [
           Expanded(
             child: Column(
@@ -509,6 +520,8 @@ class ListHeader extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: context.textTheme.labelLarge?.copyWith(
                     color: context.colorScheme.onSurfaceVariant.opacity80,
                     fontWeight: FontWeight.w600,
@@ -527,7 +540,8 @@ class ListHeader extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.end,
-            children: [...genActions(actions, space: space)],
+            spacing: space ?? appBarActionSpace,
+            children: [...actions],
           ),
         ],
       ),
@@ -558,48 +572,17 @@ List<Widget> generateSection({
   ];
 }
 
-Widget generateSectionV2({
-  String? title,
-  required Iterable<Widget> items,
-  List<Widget>? actions,
-  bool separated = true,
-}) {
-  final genItems = items
-      .map<Widget>((item) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: CommonCard(
-            type: CommonCardType.filled,
-            radius: 0,
-            child: item,
-          ),
-        );
-      })
-      .separated(const Divider(height: 2, color: Colors.transparent));
-  return Column(
-    children: [
-      if (items.isNotEmpty && title != null)
-        ListHeader(title: title, actions: actions),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Column(children: [...genItems]),
-      ),
-    ],
-  );
-}
-
 Widget generateSectionV3({
   String? title,
   required Iterable<Widget> items,
   List<Widget>? actions,
 }) {
-  final genItems = items.mapIndexed<Widget>((index, item) {
-    final position = ItemPosition.get(index, items.length);
-    if (position != ItemPosition.middle) {
-      return ItemPositionProvider(position: position, child: item);
-    }
-    return item;
-  });
+  final genItems = items.mapIndexed<Widget>(
+    (index, item) => ItemPositionProvider(
+      position: ItemPosition.get(index, items.length),
+      child: item,
+    ),
+  );
   return Column(
     children: [
       if (items.isNotEmpty && title != null)
@@ -624,206 +607,10 @@ List<Widget> generateInfoSection({
   ];
 }
 
-Widget generateListView(List<Widget> items) {
+Widget generateListView(List<Widget> items, {double topPadding = 0}) {
   return ListView.builder(
     itemCount: items.length,
     itemBuilder: (_, index) => items[index],
-    padding: const EdgeInsets.only(bottom: 16),
+    padding: EdgeInsets.only(top: topPadding, bottom: 16),
   );
-}
-
-class CommonSelectedListItem extends StatelessWidget {
-  final bool isSelected;
-  final bool isEditing;
-  final Widget title;
-  final VoidCallback onSelected;
-  final VoidCallback onPressed;
-
-  const CommonSelectedListItem({
-    super.key,
-    required this.isSelected,
-    required this.onSelected,
-    this.isEditing = false,
-    required this.title,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-        color: Colors.transparent,
-        child: CommonCard(
-          radius: 18,
-          type: CommonCardType.filled,
-          isSelected: isSelected,
-          onPressed: () {
-            if (isEditing) {
-              onSelected();
-              return;
-            }
-            onPressed();
-          },
-          child: ListTile(
-            minTileHeight: 32 + globalState.measure.bodyMediumHeight,
-            minVerticalPadding: 12,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            trailing: SizedBox(
-              width: 24,
-              height: 24,
-              child: CommonCheckBox(
-                value: isSelected,
-                isCircle: true,
-                onChanged: (_) {
-                  onSelected();
-                },
-              ),
-            ),
-            title: title,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class DecorationListItem extends StatelessWidget {
-  final Widget title;
-  final Widget? subtitle;
-  final Widget? leading;
-  final Widget? trailing;
-  final bool? isSelected;
-  final double? horizontalTitleGap;
-  final EdgeInsetsGeometry? contentPadding;
-  final VoidCallback? onPressed;
-  final double? minVerticalPadding;
-  final bool invalid;
-
-  const DecorationListItem({
-    super.key,
-    this.contentPadding,
-    required this.title,
-    this.leading,
-    this.trailing,
-    this.subtitle,
-    this.isSelected,
-    this.onPressed,
-    this.horizontalTitleGap,
-    this.minVerticalPadding,
-    this.invalid = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final proxyDecorator =
-        ProxyDecoratorProvider.of(context)?.isProxyDecorator ?? false;
-    final position = ItemPositionProvider.of(context)?.position;
-    final isStart = [
-      ItemPosition.start,
-      ItemPosition.startAndEnd,
-    ].contains(position);
-    final isEnd = [
-      ItemPosition.end,
-      ItemPosition.startAndEnd,
-    ].contains(position);
-    final borderRadius = BorderRadius.vertical(
-      top: isStart ? const Radius.circular(24) : Radius.zero,
-      bottom: isEnd ? const Radius.circular(24) : Radius.zero,
-    );
-    return CommonCard(
-      shape: proxyDecorator == true
-          ? LinearBorder.none
-          : RoundedSuperellipseBorder(borderRadius: borderRadius),
-      isError: invalid,
-      isSelected: isSelected,
-      padding: EdgeInsets.zero,
-      type: CommonCardType.filled,
-      onPressed: proxyDecorator ? null : onPressed,
-      child: LayoutBuilder(
-        builder: (_, constraints) {
-          final isInfinite = constraints.maxHeight >= double.infinity;
-          final tile = ListTile(
-            leading: leading,
-            contentPadding:
-                contentPadding ?? const EdgeInsets.only(right: 16, left: 16),
-            title: title,
-            subtitle: subtitle,
-            minVerticalPadding: minVerticalPadding ?? 6,
-            minTileHeight: 54,
-            horizontalTitleGap: horizontalTitleGap,
-            trailing: trailing,
-          );
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                fit: isInfinite ? FlexFit.loose : FlexFit.tight,
-                child: tile,
-              ),
-              if (!invalid && proxyDecorator != true && !isEnd)
-                const Divider(height: 0, indent: 14, endIndent: 14),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class SelectedDecorationListItem extends StatelessWidget {
-  final bool isSelected;
-  final bool isEditing;
-  final Widget title;
-  final Widget? subtitle;
-  final VoidCallback onSelected;
-  final VoidCallback onPressed;
-  final double? horizontalTitleGap;
-  final Widget? leading;
-  final bool invalid;
-  final double? minVerticalPadding;
-
-  const SelectedDecorationListItem({
-    super.key,
-    required this.isSelected,
-    required this.onSelected,
-    this.horizontalTitleGap,
-    this.isEditing = false,
-    this.invalid = false,
-    required this.title,
-    required this.onPressed,
-    this.minVerticalPadding,
-    this.subtitle,
-    this.leading,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return DecorationListItem(
-      title: title,
-      minVerticalPadding: minVerticalPadding,
-      contentPadding: const EdgeInsets.only(left: 16, right: 0),
-      isSelected: isSelected,
-      invalid: invalid,
-      leading: leading,
-      horizontalTitleGap: horizontalTitleGap,
-      onPressed: () {
-        if (isEditing) {
-          onSelected();
-          return;
-        }
-        onPressed();
-      },
-      subtitle: subtitle,
-      trailing: CommonCheckBox(
-        value: isSelected,
-        isCircle: true,
-        onChanged: (_) {
-          onSelected();
-        },
-      ),
-    );
-  }
 }

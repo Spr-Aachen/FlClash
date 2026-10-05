@@ -17,24 +17,38 @@ class AppPath {
   static Directory? legacyDataDirOverride;
 
   Completer<Directory> dataDir = Completer();
-  late final Future<Directory?> _downloadDir = getDownloadsDirectory();
+  late final Future<Directory?> _downloadDir = downloadDirectory();
   Completer<Directory> tempDir = Completer();
   Completer<Directory> cacheDir = Completer();
   late String appDirPath;
-  bool isPortable = false;
 
   @visibleForTesting
-  static void resetInstanceForTest({String? appDirPath, Directory? legacyDir}) {
-    _instance = null;
-    appDirPathOverride = appDirPath;
-    legacyDataDirOverride = legacyDir;
-  }
+  static Future<Directory> Function() supportDirectory =
+      getApplicationSupportDirectory;
+
+  @visibleForTesting
+  static Future<Directory> Function() temporaryDirectory =
+      getTemporaryDirectory;
+
+  @visibleForTesting
+  static Future<Directory> Function() cacheDirectory =
+      getApplicationCacheDirectory;
+
+  @visibleForTesting
+  static Future<Directory?> Function() downloadDirectory =
+      getDownloadsDirectory;
 
   AppPath._internal() {
-    appDirPath = appDirPathOverride ?? join(dirname(Platform.resolvedExecutable));
-    _initDataDir();
-    _initTempDir();
-    _initCacheDir();
+    appDirPath = join(dirname(Platform.resolvedExecutable));
+    supportDirectory().then((value) {
+      dataDir.complete(value);
+    });
+    temporaryDirectory().then((value) {
+      tempDir.complete(value);
+    });
+    cacheDirectory().then((value) {
+      cacheDir.complete(value);
+    });
   }
 
   factory AppPath() {
@@ -204,19 +218,9 @@ class AppPath {
     return join(mHomeDirPath, 'database.sqlite');
   }
 
-  Future<String> get backupFilePath async {
-    final mHomeDirPath = await homeDirPath;
-    return join(mHomeDirPath, 'backup.zip');
-  }
-
-  Future<String> get restoreDirPath async {
-    final mHomeDirPath = await homeDirPath;
-    return join(mHomeDirPath, 'restore');
-  }
-
   Future<String> get tempFilePath async {
     final mTempDir = await tempDir.future;
-    return join(mTempDir.path, 'temp${utils.id}');
+    return join(mTempDir.path, 'temp$uniqueId');
   }
 
   Future<String> get lockFilePath async {
@@ -227,11 +231,6 @@ class AppPath {
   Future<String> get configFilePath async {
     final mHomeDirPath = await homeDirPath;
     return join(mHomeDirPath, 'config.yaml');
-  }
-
-  Future<String> get sharedFilePath async {
-    final mHomeDirPath = await homeDirPath;
-    return join(mHomeDirPath, 'shared.json');
   }
 
   Future<String> get sharedPreferencesPath async {
@@ -258,28 +257,43 @@ class AppPath {
     return join(path, '$fileName.js');
   }
 
-  Future<String> getIconsCacheDir() async {
-    final directory = await cacheDir.future;
-    return join(directory.path, 'icons');
+  Future<String> get providerCacheRootPath async {
+    final directory = await homeDirPath;
+    return join(directory, providersDirectoryName);
+  }
+
+  Future<String> getProviderCachePath(
+    ProviderKind kind,
+    String fileName,
+  ) async {
+    return join(
+      await providerCacheRootPath,
+      providerCacheDirectoryName(kind),
+      fileName,
+    );
   }
 
   Future<String> getProvidersRootPath() async {
     final directory = await profilesPath;
-    return join(directory, 'providers');
+    return join(directory, providersDirectoryName);
   }
 
-  Future<String> getProvidersDirPath(String id) async {
-    final directory = await profilesPath;
-    return join(directory, 'providers', id);
+  Future<String> getProviderDirPath(int profileId, String type) async {
+    final directory = await getProvidersRootPath();
+    return join(directory, profileId.toString(), type);
   }
 
-  Future<String> getProvidersFilePath(
-    String id,
-    String type,
-    String url,
-  ) async {
-    final directory = await profilesPath;
-    return join(directory, 'providers', id, type, url.toMd5());
+  Future<void> ensureProviderDirs(int profileId) async {
+    for (final type in const [
+      proxiesProviderDirectoryName,
+      rulesProviderDirectoryName,
+    ]) {
+      final directory = Directory(await getProviderDirPath(profileId, type));
+      if (await directory.exists()) {
+        continue;
+      }
+      await directory.create(recursive: true);
+    }
   }
 
   Future<String> get tempPath async {
@@ -289,3 +303,11 @@ class AppPath {
 }
 
 final appPath = AppPath();
+
+String getBackupFileName() {
+  return '${appName}_backup_${DateTime.now().show}.zip';
+}
+
+String get logFileName {
+  return '${appName}_${DateTime.now().show}.log';
+}

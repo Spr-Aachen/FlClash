@@ -2,11 +2,11 @@ import 'dart:async';
 
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/icons/icons.dart';
 import 'package:fl_clash/providers/providers.dart';
-import 'package:fl_clash/state.dart';
 import 'package:fl_clash/views/profiles/preview.dart';
 import 'package:fl_clash/widgets/widgets.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'custom/custom.dart';
@@ -23,9 +23,13 @@ class OverwriteView extends ConsumerStatefulWidget {
 }
 
 class _OverwriteViewState extends ConsumerState<OverwriteView> {
+  late SetupAction _setupAction;
+
   @override
   void initState() {
     super.initState();
+    _setupAction = ref.read(setupActionProvider.notifier);
+    ref.listenManual(clashConfigProvider(widget.profileId), (_, _) {});
   }
 
   Future<void> _handlePreview() async {
@@ -33,7 +37,9 @@ class _OverwriteViewState extends ConsumerState<OverwriteView> {
     if (profile == null) {
       return;
     }
-    BaseNavigator.push<String>(context, PreviewProfileView(profile: profile));
+    unawaited(
+      BaseNavigator.push<String>(context, PreviewProfileView(profile: profile)),
+    );
   }
 
   @override
@@ -44,23 +50,29 @@ class _OverwriteViewState extends ConsumerState<OverwriteView> {
       child: CommonScaffold(
         title: appLocalizations.override,
         actions: [
-          CommonMinFilledButtonTheme(
-            child: FilledButton(
-              onPressed: _handlePreview,
-              child: Text(appLocalizations.preview),
-            ),
+          FilledButton(
+            onPressed: _handlePreview,
+            child: Text(appLocalizations.preview),
           ),
-          const SizedBox(width: 8),
         ],
-        body: const CustomScrollView(slivers: [_Title(), _Content()]),
+        body: ScrollConfiguration(
+          behavior: const ShowBarScrollBehavior(),
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(child: SizedBox(height: context.appBarInset)),
+              const _Title(),
+              const _Content(),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   @override
   void dispose() {
+    _setupAction.autoApplyProfile();
     super.dispose();
-    globalState.container.read(setupActionProvider.notifier).autoApplyProfile();
   }
 }
 
@@ -75,11 +87,11 @@ class _Title extends ConsumerWidget {
     };
   }
 
-  IconData _getIcon(OverwriteType type) {
+  Glyph _getIcon(OverwriteType type) {
     return switch (type) {
-      OverwriteType.standard => Icons.stars,
-      OverwriteType.script => Icons.rocket,
-      OverwriteType.custom => Icons.dashboard_customize,
+      OverwriteType.standard => AppGlyphs.star,
+      OverwriteType.script => AppGlyphs.code,
+      OverwriteType.custom => AppGlyphs.customize,
     };
   }
 
@@ -125,7 +137,7 @@ class _Title extends ConsumerWidget {
                         mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
-                          Icon(_getIcon(type)),
+                          GlyphIcon(_getIcon(type)),
                           const SizedBox(width: 8),
                           Flexible(child: Text(_getTitle(context, type))),
                         ],
@@ -158,7 +170,6 @@ class _Content extends ConsumerWidget {
   Widget build(BuildContext context, ref) {
     final profileId = ProfileIdProvider.of(context)!.profileId;
     final overwriteType = ref.watch(overwriteTypeProvider(profileId));
-    ref.listen(clashConfigProvider(profileId), (_, _) {});
     return switch (overwriteType) {
       OverwriteType.standard => const StandardContent(),
       OverwriteType.script => const ScriptContent(),

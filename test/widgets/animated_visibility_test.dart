@@ -1,5 +1,5 @@
 import 'package:fl_clash/widgets/animated_visibility.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -300,6 +300,40 @@ void main() {
     expect(exitingPosition.dx, closeTo(visiblePosition.dx, 0.01));
     expect(exitingPosition.dy, greaterThan(visiblePosition.dy + 20));
     expect(exitingPosition.dy, lessThan(600));
+  });
+
+  testWidgets('settled content paints past its bounds', (tester) async {
+    Widget buildApp(bool visible) {
+      return MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              const Expanded(child: SizedBox()),
+              AnimatedVisibility.bottomNavigation(
+                visible: visible,
+                child: const SizedBox(width: 180, height: 80),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Clip clip() => tester
+        .widget<ClipRect>(
+          find.descendant(
+            of: find.byType(AnimatedVisibility),
+            matching: find.byType(ClipRect),
+          ),
+        )
+        .clipBehavior;
+
+    await tester.pumpWidget(buildApp(true));
+    expect(clip(), Clip.none);
+
+    await tester.pumpWidget(buildApp(false));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(clip(), Clip.hardEdge);
   });
 
   testWidgets('horizontal transition clips without narrowing its child', (

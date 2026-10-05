@@ -1,36 +1,90 @@
-import 'dart:io';
-
 import 'package:fl_clash/common/tray.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Tray.getTryIcon', () {
-    final tray = Tray();
-    final suffix = tray.trayIconSuffix;
+  group('AppTray.getTrayIcon', () {
+    final windows = AppTray.forPlatform(isMacOS: false, isWindows: true);
+    final macOS = AppTray.forPlatform(isMacOS: true, isWindows: false);
+    final linux = AppTray.forPlatform(isMacOS: false, isWindows: false);
 
-    test('returns idle icon when core is not started', () {
+    test('windows loads ico files from the windows directory', () {
       expect(
-        tray.getTryIcon(isStart: false, tunEnable: false),
-        'assets/images/icon/status_1.$suffix',
+        windows.getTrayIcon(isStart: false, tunEnable: false, safeMode: false),
+        'assets/images/tray/windows/status_1.ico',
+      );
+      expect(
+        windows.getTrayIcon(isStart: true, tunEnable: false, safeMode: false),
+        'assets/images/tray/windows/status_2.ico',
+      );
+      expect(
+        windows.getTrayIcon(isStart: true, tunEnable: true, safeMode: false),
+        'assets/images/tray/windows/status_3.ico',
       );
     });
 
-    test('returns normal mode icon when core is started without TUN', () {
+    test('linux loads png files from the unix directory', () {
       expect(
-        tray.getTryIcon(isStart: true, tunEnable: false),
-        Platform.isMacOS
-            ? 'assets/images/icon/status_1.$suffix'
-            : 'assets/images/icon/status_2.$suffix',
+        linux.getTrayIcon(isStart: false, tunEnable: false, safeMode: false),
+        'assets/images/tray/unix/status_1.png',
+      );
+      expect(
+        linux.getTrayIcon(isStart: true, tunEnable: false, safeMode: false),
+        'assets/images/tray/unix/status_2.png',
+      );
+      expect(
+        linux.getTrayIcon(isStart: true, tunEnable: true, safeMode: false),
+        'assets/images/tray/unix/status_3.png',
       );
     });
 
-    test('returns enhanced mode icon when core is started with TUN', () {
-      expect(
-        tray.getTryIcon(isStart: true, tunEnable: true),
-        Platform.isMacOS
-            ? 'assets/images/icon/status_1.$suffix'
-            : 'assets/images/icon/status_3.$suffix',
-      );
+    test('macOS keeps the template icon in every state', () {
+      for (final (isStart, tunEnable) in [
+        (false, false),
+        (true, false),
+        (true, true),
+      ]) {
+        expect(
+          macOS.getTrayIcon(
+            isStart: isStart,
+            tunEnable: tunEnable,
+            safeMode: false,
+          ),
+          'assets/images/tray/macos/status_1.png',
+        );
+      }
+    });
+
+    test('safe mode shows its own icon whatever the core is doing', () {
+      for (final (isStart, tunEnable) in [
+        (false, false),
+        (true, false),
+        (true, true),
+      ]) {
+        expect(
+          windows.getTrayIcon(
+            isStart: isStart,
+            tunEnable: tunEnable,
+            safeMode: true,
+          ),
+          'assets/images/tray/windows/status_4.ico',
+        );
+        expect(
+          linux.getTrayIcon(
+            isStart: isStart,
+            tunEnable: tunEnable,
+            safeMode: true,
+          ),
+          'assets/images/tray/unix/status_4.png',
+        );
+        expect(
+          macOS.getTrayIcon(
+            isStart: isStart,
+            tunEnable: tunEnable,
+            safeMode: true,
+          ),
+          'assets/images/tray/macos/status_4.png',
+        );
+      }
     });
   });
 }

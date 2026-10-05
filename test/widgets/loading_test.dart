@@ -1,5 +1,7 @@
+import 'package:fl_clash/common/shape.dart';
 import 'package:fl_clash/widgets/loading.dart';
-import 'package:flutter/material.dart';
+import 'package:material_new_shapes/material_new_shapes.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -123,7 +125,10 @@ void main() {
             variant: LoadingIndicatorM3EVariant.contained,
             constraints: const BoxConstraints.tightFor(width: 32, height: 32),
             padding: const EdgeInsets.all(4),
-            polygons: const [StarBorder(points: 6), StarBorder(points: 8)],
+            polygons: [
+              RoundedPolygon.star(numVerticesPerRadius: 6),
+              RoundedPolygon.star(numVerticesPerRadius: 8),
+            ],
           ),
         ),
       ),
@@ -135,14 +140,14 @@ void main() {
         matching: find.byType(DecoratedBox),
       ),
     );
-    final decoration = decoratedBox.decoration as BoxDecoration;
+    final decoration = decoratedBox.decoration as ShapeDecoration;
     final customPaint = find.descendant(
       of: find.byType(CommonCircleLoading),
       matching: find.byType(CustomPaint),
     );
 
     expect(decoration.color, colorScheme.primaryContainer);
-    expect(decoration.borderRadius, BorderRadius.circular(999));
+    expect(decoration.shape, AppShape.full);
     expect(tester.getSize(customPaint), const Size.square(32));
     expect(
       tester.getSize(find.byType(CommonCircleLoading)),

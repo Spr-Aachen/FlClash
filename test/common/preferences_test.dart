@@ -1,95 +1,157 @@
 import 'dart:convert';
-import 'dart:io';
 
+import 'package:fl_clash/common/boot_record.dart';
+import 'package:fl_clash/common/constant.dart';
 import 'package:fl_clash/common/preferences.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const _sharedState = SharedState(
+  stopTip: 'stop',
+  startTip: 'start',
+  localNetworkTip: 'local',
+  currentProfileName: 'profile',
+  stopText: 'stopped',
+  onlyStatisticsProxy: true,
+  crashlytics: false,
+);
 
 void main() {
-  late Directory tempDir;
+  TestWidgetsFlutterBinding.ensureInitialized();
+  SharedPreferences.setMockInitialValues({});
 
-  setUp(() {
-    tempDir = Directory.systemTemp.createTempSync('preferences_test');
+  late SharedPreferences store;
+
+  setUp(() async {
+    store = await SharedPreferences.getInstance();
+    await store.clear();
   });
 
-  tearDown(() {
-    try {
-      tempDir.deleteSync(recursive: true);
-    } catch (_) {}
+  group('version', () {
+    test('defaults to 0 when never written', () async {
+      expect(await preferences.getVersion(), 0);
+    });
+
+    test('round-trips a written version', () async {
+      await preferences.setVersion(7);
+
+      expect(await preferences.getVersion(), 7);
+    });
   });
 
-  String storagePath() => '${tempDir.path}/shared_preferences.json';
-
-  group('Preferences', () {
-    test('round-trips version and config', () async {
-      final prefs = Preferences.createForTest(path: storagePath());
-
-      expect(await prefs.getVersion(), 0);
-      expect(await prefs.getConfig(), isNull);
-
-      await prefs.setVersion(1);
-      const config = Config(themeProps: defaultThemeProps);
-      expect(await prefs.saveConfig(config), isTrue);
-
-      final reloaded = Preferences.createForTest(path: storagePath());
-      expect(await reloaded.getVersion(), 1);
-      expect((await reloaded.getConfig())?.themeProps, defaultThemeProps);
+  group('config', () {
+    test('getConfig returns null when nothing is stored', () async {
+      expect(await preferences.getConfig(), isNull);
     });
 
-    test('strips the legacy flutter. prefix from migrated files', () async {
-      const config = Config(themeProps: defaultThemeProps);
-      await File(storagePath()).writeAsString(
-        jsonEncode({
-          'flutter.version': 2,
-          'flutter.config': jsonEncode(config),
-        }),
+    test('saveConfig then getConfig round-trips the model', () async {
+      const config = Config(
+        themeProps: defaultThemeProps,
+        currentProfileId: 42,
+        overrideDns: true,
+        excludeSSIDs: ['home'],
       );
 
-      final prefs = Preferences.createForTest(path: storagePath());
+      expect(await preferences.saveConfig(config), isTrue);
+      final restored = await preferences.getConfig();
 
-      expect(await prefs.getVersion(), 2);
-      expect(await prefs.getConfig(), isNotNull);
+      expect(restored, isNotNull);
+      expect(restored!.currentProfileId, 42);
+      expect(restored.overrideDns, isTrue);
+      expect(restored.excludeSSIDs, ['home']);
     });
 
-    test('reports isInit false when the file is corrupt', () async {
-      await File(storagePath()).writeAsString('not json');
+    test('getConfigMap returns null for malformed JSON', () async {
+      await store.setString(configKey, 'not-json');
 
-      final prefs = Preferences.createForTest(path: storagePath());
-
-      expect(await prefs.isInit, isFalse);
+      expect(await preferences.getConfigMap(), isNull);
     });
 
-    test('handles a missing file as an empty store', () async {
-      final prefs = Preferences.createForTest(path: storagePath());
+    test('getConfigMap returns null when the payload is not a map', () async {
+      await store.setString(configKey, '123');
 
-      expect(await prefs.isInit, isTrue);
-      expect(await prefs.getVersion(), 0);
+      expect(await preferences.getConfigMap(), isNull);
+    });
+  });
+
+  group('clash config', () {
+    test('getClashConfigMap returns null when nothing is stored', () async {
+      expect(await preferences.getClashConfigMap(), isNull);
     });
 
-    test('saves shared state and clears all values', () async {
-      final prefs = Preferences.createForTest(path: storagePath());
+    test('getClashConfigMap decodes a stored map', () async {
+      await store.setString(clashConfigKey, json.encode({'mode': 'rule'}));
 
-      await prefs.setVersion(1);
-      await prefs.saveShareState(
-        const SharedState(
-          setupParams: null,
-          vpnOptions: null,
-          stopTip: '',
-          startTip: '',
-          currentProfileName: 'test',
-          stopText: '',
-          onlyStatisticsProxy: false,
-          crashlytics: false,
-        ),
+      expect(await preferences.getClashConfigMap(), {'mode': 'rule'});
+    });
+
+    test('getClashConfigMap returns null for malformed JSON', () async {
+      await store.setString(clashConfigKey, '{oops');
+
+      expect(await preferences.getClashConfigMap(), isNull);
+    });
+
+    test('clearClashConfig removes only the clash config entry', () async {
+      await store.setString(clashConfigKey, json.encode({'mode': 'rule'}));
+      await preferences.setVersion(3);
+
+      await preferences.clearClashConfig();
+
+      expect(await preferences.getClashConfigMap(), isNull);
+      expect(await preferences.getVersion(), 3);
+    });
+  });
+
+  test('saveShareState writes the encoded shared state', () async {
+    await preferences.saveShareState(_sharedState);
+
+    final raw = store.getString('sharedState');
+    expect(raw, isNotNull);
+    expect(
+      SharedState.fromJson(json.decode(raw!) as Map<String, Object?>),
+      _sharedState,
+    );
+  });
+
+  test('clearPreferences empties every stored key', () async {
+    await preferences.setVersion(9);
+    await preferences.saveConfig(const Config(themeProps: defaultThemeProps));
+
+    await preferences.clearPreferences();
+
+    expect(await preferences.getVersion(), 0);
+    expect(await preferences.getConfig(), isNull);
+  });
+
+  test('isInit resolves true once shared preferences are available', () async {
+    expect(await preferences.isInit, isTrue);
+  });
+
+  group('boot record', () {
+    test('getBootRecord returns null when nothing is stored', () async {
+      expect(await preferences.getBootRecord(), isNull);
+    });
+
+    test('saveBootRecord then getBootRecord round-trips the record', () async {
+      const record = BootRecord(
+        stage: BootStage.starting,
+        profileId: 5,
+        startedAt: 111,
+        failureCount: 1,
+        lastFailedProfileId: 4,
+        handledExitAt: 99,
       );
 
-      final raw = jsonDecode(await File(storagePath()).readAsString())
-          as Map<String, dynamic>;
-      expect(raw, contains('sharedState'));
+      await preferences.saveBootRecord(record);
 
-      await prefs.clearPreferences();
-      final cleared = Preferences.createForTest(path: storagePath());
-      expect(await cleared.getVersion(), 0);
+      expect(await preferences.getBootRecord(), record);
+    });
+
+    test('getBootRecord survives a corrupt entry', () async {
+      await store.setString(bootRecordKey, 'not json');
+
+      expect(await preferences.getBootRecord(), isNull);
     });
   });
 }

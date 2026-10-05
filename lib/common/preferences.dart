@@ -2,130 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:fl_clash/common/boot_record.dart';
+import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/common/system_dns.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'constant.dart';
-import 'file.dart';
-import 'path.dart';
-import 'print.dart';
-import 'system.dart';
-
-const _legacyKeyPrefix = 'flutter.';
-
-abstract class _PreferencesStore {
-  Future<Map<String, Object?>?> load();
-  Future<bool> save(Map<String, Object?> data);
-}
-
-class _FileStore implements _PreferencesStore {
-  final String? pathOverride;
-
-  _FileStore({this.pathOverride});
-
-  Future<String> _resolvePath() async =>
-      pathOverride ?? await appPath.sharedPreferencesPath;
-
-  @override
-  Future<Map<String, Object?>?> load() async {
-    try {
-      final file = File(await _resolvePath());
-      final Map<String, Object?> data = {};
-      if (await file.exists()) {
-        final content = await file.readAsString();
-        if (content.isNotEmpty) {
-          final decoded = jsonDecode(content);
-          if (decoded is! Map) {
-            throw const FormatException('Preferences file is not a JSON map');
-          }
-          for (final MapEntry(:key, :value) in decoded.entries) {
-            data[key.startsWith(_legacyKeyPrefix)
-                ? key.substring(_legacyKeyPrefix.length)
-                : key] = value;
-          }
-        }
-      }
-      return data;
-    } catch (e) {
-      commonPrint.log(
-        'Failed to load preferences: $e',
-        logLevel: LogLevel.warning,
-      );
-      return null;
-    }
-  }
-
-  @override
-  Future<bool> save(Map<String, Object?> data) async {
-    try {
-      final file = File(await _resolvePath());
-      await file.safeWriteAsString(jsonEncode(data));
-      return true;
-    } catch (e) {
-      commonPrint.log(
-        'Failed to save preferences: $e',
-        logLevel: LogLevel.warning,
-      );
-      return false;
-    }
-  }
-}
-
-class _SharedPreferencesStore implements _PreferencesStore {
-  @override
-  Future<Map<String, Object?>?> load() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final data = <String, Object?>{};
-      for (final key in prefs.getKeys()) {
-        data[key] = prefs.get(key);
-      }
-      return data;
-    } catch (e) {
-      commonPrint.log(
-        'Failed to load preferences: $e',
-        logLevel: LogLevel.warning,
-      );
-      return null;
-    }
-  }
-
-  @override
-  Future<bool> save(Map<String, Object?> data) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-      final results = <Future<bool>>[];
-      data.forEach((key, value) {
-        results.add(_setSharedPreferencesValue(prefs, key, value));
-      });
-      return (await Future.wait(results)).every((result) => result);
-    } catch (e) {
-      commonPrint.log(
-        'Failed to save preferences: $e',
-        logLevel: LogLevel.warning,
-      );
-      return false;
-    }
-  }
-}
-
-Future<bool> _setSharedPreferencesValue(
-  SharedPreferences prefs,
-  String key,
-  Object? value,
-) {
-  return switch (value) {
-    int() => prefs.setInt(key, value),
-    String() => prefs.setString(key, value),
-    bool() => prefs.setBool(key, value),
-    double() => prefs.setDouble(key, value),
-    List<String>() => prefs.setStringList(key, value),
-    _ => Future.value(false),
-  };
-}
 
 class Preferences {
   static Preferences? _instance;
@@ -201,7 +84,11 @@ class Preferences {
       if (configString == null) return null;
       final Map<String, Object?>? configMap = jsonDecode(configString);
       return configMap;
-    } catch (_) {
+    } catch (e) {
+      commonPrint.log(
+        'getConfigMap error ${e.toString()}',
+        logLevel: LogLevel.warning,
+      );
       return null;
     }
   }
@@ -211,19 +98,26 @@ class Preferences {
       final preferences = await _preferences;
       final clashConfigString = preferences?[clashConfigKey] as String?;
       if (clashConfigString == null) return null;
-      return jsonDecode(clashConfigString) as Map<String, Object?>;
-    } catch (_) {
+      return json.decode(clashConfigString);
+    } catch (e) {
+      commonPrint.log(
+        'getClashConfigMap error ${e.toString()}',
+        logLevel: LogLevel.warning,
+      );
       return null;
     }
   }
 
   Future<void> clearClashConfig() async {
     try {
-      final preferences = await _preferences;
-      if (preferences == null) return;
-      preferences.remove(clashConfigKey);
-      await _save();
-    } catch (_) {
+      final preferences = await sharedPreferencesCompleter.future;
+      await preferences?.remove(clashConfigKey);
+      return;
+    } catch (e) {
+      commonPrint.log(
+        'clearClashConfig error ${e.toString()}',
+        logLevel: LogLevel.warning,
+      );
       return;
     }
   }
@@ -237,10 +131,60 @@ class Preferences {
   }
 
   Future<bool> saveConfig(Config config) async {
-    final preferences = await _preferences;
-    if (preferences == null) return false;
-    preferences[configKey] = jsonEncode(config);
-    return _save();
+    final preferences = await sharedPreferencesCompleter.future;
+    return preferences?.setString(configKey, json.encode(config)) ?? false;
+  }
+
+  Future<SystemDnsRecord?> getSystemDnsRecord() async {
+    try {
+      final sharedPreferencesIns = await sharedPreferencesCompleter.future;
+      final raw = sharedPreferencesIns?.getString(systemDnsRecordKey);
+      if (raw == null) {
+        return null;
+      }
+      return SystemDnsRecord.fromJson(json.decode(raw));
+    } catch (e) {
+      commonPrint.log(
+        'getSystemDnsRecord error ${e.toString()}',
+        logLevel: LogLevel.warning,
+      );
+      return null;
+    }
+  }
+
+  Future<void> saveSystemDnsRecord(SystemDnsRecord record) async {
+    final sharedPreferencesIns = await sharedPreferencesCompleter.future;
+    await sharedPreferencesIns?.setString(
+      systemDnsRecordKey,
+      json.encode(record),
+    );
+  }
+
+  Future<void> clearSystemDnsRecord() async {
+    final sharedPreferencesIns = await sharedPreferencesCompleter.future;
+    await sharedPreferencesIns?.remove(systemDnsRecordKey);
+  }
+
+  Future<BootRecord?> getBootRecord() async {
+    try {
+      final sharedPreferencesIns = await sharedPreferencesCompleter.future;
+      final raw = sharedPreferencesIns?.getString(bootRecordKey);
+      if (raw == null) {
+        return null;
+      }
+      return BootRecord.fromJson(json.decode(raw));
+    } catch (e) {
+      commonPrint.log(
+        'getBootRecord error ${e.toString()}',
+        logLevel: LogLevel.warning,
+      );
+      return null;
+    }
+  }
+
+  Future<void> saveBootRecord(BootRecord record) async {
+    final sharedPreferencesIns = await sharedPreferencesCompleter.future;
+    await sharedPreferencesIns?.setString(bootRecordKey, json.encode(record));
   }
 
   Future<void> clearPreferences() async {

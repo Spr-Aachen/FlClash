@@ -1,15 +1,25 @@
 import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/l10n/l10n.dart';
-import 'package:fl_clash/manager/manager.dart';
+import 'package:fl_clash/manager/status_manager.dart';
 import 'package:fl_clash/models/state.dart';
+import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/widgets/inherited.dart';
 import 'package:fl_clash/widgets/scaffold.dart';
 import 'package:fl_clash/widgets/sheet.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 extension BuildContextExtension on BuildContext {
   CommonScaffoldState? get commonScaffoldState {
     return findAncestorStateOfType<CommonScaffoldState>();
+  }
+
+  bool get isMobileView {
+    return ProviderScope.containerOf(
+      this,
+      listen: false,
+    ).read(isMobileViewProvider);
   }
 
   void safeNestedPop<T extends Object?>([T? result]) {
@@ -21,24 +31,39 @@ extension BuildContextExtension on BuildContext {
     }
   }
 
-  double get sheetTopPadding {
-    final sheetType = SheetProvider.of(this)!.type;
-    if (sheetType == SheetType.bottomSheet) {
-      return sheetAppBarHeight;
-    } else {
-      return 10;
-    }
-  }
+  bool get isInBottomSheet =>
+      SheetProvider.of(this)?.type == SheetType.bottomSheet;
 
-  void showNotifier(String text, {MessageActionState? actionState}) {
+  /// How far a page's app bar reaches over the top of its body.
+  ///
+  /// Where a page builds the body it hands its scaffold, outside that body,
+  /// this is where the bar will end: a toolbar below the status bar.
+  double get appBarInset =>
+      FloatingBarScope.of(this) ??
+      (isInBottomSheet
+          ? sheetAppBarHeight
+          : MediaQuery.paddingOf(this).top + pageToolbarHeight);
+
+  /// Where a scaffold body's content starts: a gap clear of the bar; a bottom
+  /// sheet's header already trails its own gap.
+  double get contentTopPadding =>
+      TopInsetScope.of(this) ??
+      (isInBottomSheet ? sheetAppBarHeight : appBarInset + 12);
+
+  void showNotifier(
+    String text, {
+    MessageLevel level = MessageLevel.info,
+    MessageActionState? actionState,
+  }) {
     return findAncestorStateOfType<StatusManagerState>()?.message(
       text,
+      level: level,
       actionState: actionState,
     );
   }
 
   void showSnackBar(String message, {SnackBarAction? action}) {
-    final width = viewWidth;
+    final width = MediaQuery.sizeOf(this).width;
     EdgeInsets margin;
     if (width < 600) {
       margin = const EdgeInsets.only(bottom: 16, right: 16, left: 16);
@@ -56,15 +81,12 @@ extension BuildContextExtension on BuildContext {
     );
   }
 
-  Size get appSize {
-    return MediaQuery.of(this).size;
-  }
-
-  double get viewWidth {
-    return appSize.width;
-  }
-
   ColorScheme get colorScheme => Theme.of(this).colorScheme;
+
+  bool get disableAnimations => MediaQuery.disableAnimationsOf(this);
+
+  Duration motionDuration(Duration duration) =>
+      disableAnimations ? Duration.zero : duration;
 
   TextTheme get textTheme => Theme.of(this).textTheme;
 
@@ -87,23 +109,5 @@ extension BuildContextExtension on BuildContext {
 
     visitor(this as Element);
     return state;
-  }
-}
-
-class BackHandleInherited extends InheritedWidget {
-  final Function handleBack;
-
-  const BackHandleInherited({
-    super.key,
-    required this.handleBack,
-    required super.child,
-  });
-
-  static BackHandleInherited? of(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<BackHandleInherited>();
-
-  @override
-  bool updateShouldNotify(BackHandleInherited oldWidget) {
-    return handleBack != oldWidget.handleBack;
   }
 }
