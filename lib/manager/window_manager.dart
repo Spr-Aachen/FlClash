@@ -1,13 +1,17 @@
 import 'dart:async';
 
 import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/common/launch.dart';
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/icons/icons.dart';
+import 'package:fl_clash/models/config.dart';
 import 'package:fl_clash/providers/providers.dart';
-import 'package:fl_clash/state.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:window_ext/window_ext.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:window/window.dart';
+
+const _windowGeometryDelay = Duration(milliseconds: 120);
 
 class WindowManager extends ConsumerStatefulWidget {
   final Widget child;
@@ -19,7 +23,11 @@ class WindowManager extends ConsumerStatefulWidget {
 }
 
 class _WindowContainerState extends ConsumerState<WindowManager>
-    with WindowListener, WindowExtListener {
+    with WindowListener {
+  Timer? _windowGeometryTimer;
+  int _windowGeometryRevision = 0;
+  int _windowBlurRevision = 0;
+
   @override
   Widget build(BuildContext context) {
     return widget.child;
@@ -38,8 +46,38 @@ class _WindowContainerState extends ConsumerState<WindowManager>
         });
       }
     });
-    windowExtManager.addListener(this);
-    windowManager.addListener(this);
+    ref.listenManual(windowBlurRequestProvider, (prev, next) {
+      if (prev != next) {
+        unawaited(_applyWindowBlur(next));
+      }
+    }, fireImmediately: true);
+    desktopWindow.addListener(this);
+  }
+
+  Future<void> _applyWindowBlur(WindowBlurRequest request) async {
+    final port = windowPort;
+    if (port == null) {
+      return;
+    }
+    final revision = ++_windowBlurRevision;
+    bool active;
+    try {
+      active = await port.setBlur(
+        enabled: request.enabled,
+        brightness: request.brightness,
+        tint: request.tint,
+      );
+    } catch (error) {
+      commonPrint.log(
+        'Window blur failed: ${compactError(error)}',
+        logLevel: LogLevel.warning,
+      );
+      active = false;
+    }
+    if (!mounted || revision != _windowBlurRevision) {
+      return;
+    }
+    ref.read(windowBlurProvider.notifier).value = active;
   }
 
   @override
@@ -52,55 +90,113 @@ class _WindowContainerState extends ConsumerState<WindowManager>
   void onWindowFocus() {
     super.onWindowFocus();
     commonPrint.log('focus');
-    render?.resume();
+  }
+
+  /// Another launch, or a Dock reopen, asked for the window.
+  @override
+  void onWindowActivate() {
+    super.onWindowActivate();
+    unawaited(windowPort?.show());
   }
 
   @override
-  Future<void> onShouldTerminate() async {
+  Future<void> onWindowShouldTerminate() async {
     await ref.read(systemActionProvider.notifier).handleExit();
-    super.onShouldTerminate();
+    super.onWindowShouldTerminate();
   }
 
-  @override
-  void onWindowMoved() {
-    super.onWindowMoved();
-    windowManager.getPosition().then((offset) {
-      ref
-          .read(windowSettingProvider.notifier)
-          .update((state) => state.copyWith(top: offset.dy, left: offset.dx));
+  void _scheduleWindowGeometryCapture() {
+    final revision = ++_windowGeometryRevision;
+    _windowGeometryTimer?.cancel();
+    _windowGeometryTimer = Timer(_windowGeometryDelay, () {
+      _windowGeometryTimer = null;
+      unawaited(_captureWindowGeometry(revision));
     });
   }
 
+  Future<void> _captureWindowGeometry(int revision) async {
+    final port = windowPort;
+    if (port == null || !mounted) {
+      return;
+    }
+    final current = ref.read(windowSettingProvider);
+    WindowProps? geometry;
+    try {
+      geometry = await port.captureNormalGeometry(current);
+    } catch (error) {
+      commonPrint.log(
+        'Window geometry capture failed: ${compactError(error)}',
+        logLevel: LogLevel.warning,
+      );
+      return;
+    }
+    if (!mounted || revision != _windowGeometryRevision || geometry == null) {
+      return;
+    }
+    ref.read(windowSettingProvider.notifier).value = geometry;
+  }
+
+  void _invalidateWindowGeometryCapture() {
+    _windowGeometryRevision++;
+    _windowGeometryTimer?.cancel();
+    _windowGeometryTimer = null;
+  }
+
   @override
-  Future<void> onWindowResized() async {
-    super.onWindowResized();
-    final size = await windowManager.getSize();
-    ref
-        .read(windowSettingProvider.notifier)
-        .update(
-          (state) => state.copyWith(width: size.width, height: size.height),
-        );
+  void onWindowGeometryChanged() {
+    super.onWindowGeometryChanged();
+    _scheduleWindowGeometryCapture();
+  }
+
+  @override
+  void onWindowMaximize() {
+    _invalidateWindowGeometryCapture();
+    super.onWindowMaximize();
+    if (system.isWindows) {
+      unawaited(desktopWindow.setRoundedCorners(false));
+    }
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    super.onWindowUnmaximize();
+    if (system.isWindows) {
+      unawaited(desktopWindow.setRoundedCorners(true));
+    }
+    _scheduleWindowGeometryCapture();
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    _invalidateWindowGeometryCapture();
+    super.onWindowEnterFullScreen();
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    super.onWindowLeaveFullScreen();
+    _scheduleWindowGeometryCapture();
   }
 
   @override
   void onWindowMinimize() async {
+    _invalidateWindowGeometryCapture();
     ref.read(storeActionProvider.notifier).savePreferencesDebounce();
     commonPrint.log('minimize');
-    render?.pause();
     super.onWindowMinimize();
   }
 
   @override
   void onWindowRestore() {
     commonPrint.log('restore');
-    render?.resume();
     super.onWindowRestore();
+    _scheduleWindowGeometryCapture();
   }
 
   @override
-  Future<void> dispose() async {
-    windowManager.removeListener(this);
-    windowExtManager.removeListener(this);
+  void dispose() {
+    _invalidateWindowGeometryCapture();
+    desktopWindow.removeListener(this);
     super.dispose();
   }
 }
@@ -116,19 +212,19 @@ class WindowHeaderContainer extends StatelessWidget {
       builder: (_, ref, child) {
         final isMobileView = ref.watch(isMobileViewProvider);
         final version = ref.watch(versionProvider);
-        if ((version <= 10 || !isMobileView) && system.isMacOS) {
+        final showsHeader = showsWindowHeader(
+          isDesktop: system.isDesktop,
+          isMacOS: system.isMacOS,
+          version: version,
+          isMobileView: isMobileView,
+        );
+        if (!showsHeader) {
           return child!;
         }
-        return Stack(
-          children: [
-            Column(
-              children: [
-                SizedBox(height: kHeaderHeight),
-                Expanded(flex: 1, child: child!),
-              ],
-            ),
-            const WindowHeader(),
-          ],
+        return WindowHeaderLayout(
+          height: kHeaderHeight,
+          header: const WindowHeader(),
+          child: child!,
         );
       },
       child: child,
@@ -136,156 +232,367 @@ class WindowHeaderContainer extends StatelessWidget {
   }
 }
 
-class WindowHeader extends StatefulWidget {
-  const WindowHeader({super.key});
+class WindowHeaderLayout extends StatelessWidget {
+  const WindowHeaderLayout({
+    super.key,
+    required this.height,
+    required this.header,
+    required this.child,
+  });
 
-  @override
-  State<WindowHeader> createState() => _WindowHeaderState();
-}
-
-class _WindowHeaderState extends State<WindowHeader> {
-  final isMaximizedNotifier = ValueNotifier<bool>(false);
-  final isPinNotifier = ValueNotifier<bool>(false);
-
-  @override
-  void initState() {
-    super.initState();
-    _initNotifier();
-  }
-
-  Future<void> _initNotifier() async {
-    isMaximizedNotifier.value = await windowManager.isMaximized();
-    isPinNotifier.value = await windowManager.isAlwaysOnTop();
-  }
-
-  @override
-  void dispose() {
-    isMaximizedNotifier.dispose();
-    isPinNotifier.dispose();
-    super.dispose();
-  }
-
-  Future<void> _updateMaximized() async {
-    final isMaximized = await windowManager.isMaximized();
-    if (isMaximized) {
-      await windowManager.unmaximize();
-      if (system.isWindows) {
-        windowExtManager.setWindowCornerPreference(round: true);
-      }
-    } else {
-      await windowManager.maximize();
-      if (system.isWindows) {
-        windowExtManager.setWindowCornerPreference(round: false);
-      }
-    }
-    final res = await windowManager.isMaximized();
-    if (mounted) {
-      isMaximizedNotifier.value = res;
-    }
-  }
-
-  Future<void> _updatePin() async {
-    final isAlwaysOnTop = await windowManager.isAlwaysOnTop();
-    await windowManager.setAlwaysOnTop(!isAlwaysOnTop);
-    isPinNotifier.value = await windowManager.isAlwaysOnTop();
-  }
-
-  Widget _buildActions() {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: () async {
-            _updatePin();
-          },
-          icon: ValueListenableBuilder(
-            valueListenable: isPinNotifier,
-            builder: (_, value, _) {
-              return value
-                  ? const Icon(Icons.push_pin)
-                  : const Icon(Icons.push_pin_outlined);
-            },
-          ),
-        ),
-        IconButton(
-          onPressed: () {
-            windowManager.minimize();
-          },
-          icon: const Icon(Icons.remove),
-        ),
-        IconButton(
-          onPressed: () async {
-            _updateMaximized();
-          },
-          icon: ValueListenableBuilder(
-            valueListenable: isMaximizedNotifier,
-            builder: (_, value, _) {
-              return value
-                  ? const Icon(Icons.filter_none, size: 20)
-                  : const Icon(Icons.crop_square);
-            },
-          ),
-        ),
-        IconButton(
-          onPressed: () {
-            globalState.container
-                .read(systemActionProvider.notifier)
-                .handleClose();
-          },
-          icon: const Icon(Icons.close),
-        ),
-      ],
-    );
-  }
+  final double height;
+  final Widget header;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
+    return Overlay.wrap(
       child: Stack(
-        alignment: AlignmentDirectional.center,
         children: [
-          Positioned(
-            child: GestureDetector(
-              onPanStart: (_) {
-                windowManager.startDragging();
-              },
-              onDoubleTap: () {
-                _updateMaximized();
-              },
-              child: Container(
-                color: context.colorScheme.secondary.opacity15,
-                alignment: Alignment.centerLeft,
-                height: kHeaderHeight,
-              ),
-            ),
+          Column(
+            children: [
+              SizedBox(height: height),
+              Expanded(flex: 1, child: child),
+            ],
           ),
-          if (system.isMacOS)
-            const Text(appName)
-          else ...[
-            Positioned(right: 0, child: _buildActions()),
-          ],
+          Positioned(top: 0, left: 0, right: 0, child: header),
         ],
       ),
     );
   }
 }
 
-class AppIcon extends StatelessWidget {
-  const AppIcon({super.key});
+@immutable
+class WindowCaptionState {
+  const WindowCaptionState({
+    this.isPinned = false,
+    this.isMaximized = false,
+    this.isFullScreen = false,
+  });
+
+  final bool isPinned;
+  final bool isMaximized;
+  final bool isFullScreen;
+
+  WindowCaptionState copyWith({
+    bool? isPinned,
+    bool? isMaximized,
+    bool? isFullScreen,
+  }) {
+    return WindowCaptionState(
+      isPinned: isPinned ?? this.isPinned,
+      isMaximized: isMaximized ?? this.isMaximized,
+      isFullScreen: isFullScreen ?? this.isFullScreen,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is WindowCaptionState &&
+        other.isPinned == isPinned &&
+        other.isMaximized == isMaximized &&
+        other.isFullScreen == isFullScreen;
+  }
+
+  @override
+  int get hashCode => Object.hash(isPinned, isMaximized, isFullScreen);
+}
+
+/// Maximize and fullscreen are written only from window events: the window
+/// manager can change both on its own, and on Linux a maximize request is
+/// applied later, so reading the state back right after the call is stale.
+class WindowCaptionController extends ValueNotifier<WindowCaptionState>
+    with WindowListener {
+  WindowCaptionController() : super(const WindowCaptionState()) {
+    desktopWindow.addListener(this);
+    unawaited(_syncFromWindow());
+  }
+
+  bool _disposed = false;
+
+  Future<void> _syncFromWindow() async {
+    final states = await Future.wait<bool>([
+      desktopWindow.isAlwaysOnTop(),
+      desktopWindow.isMaximized(),
+      desktopWindow.isFullScreen(),
+    ]);
+    _set(
+      WindowCaptionState(
+        isPinned: states[0],
+        isMaximized: states[1],
+        isFullScreen: states[2],
+      ),
+    );
+  }
+
+  void _set(WindowCaptionState state) {
+    if (_disposed) return;
+    value = state;
+  }
+
+  @override
+  void onWindowMaximize() {
+    super.onWindowMaximize();
+    _set(value.copyWith(isMaximized: true));
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    super.onWindowUnmaximize();
+    _set(value.copyWith(isMaximized: false));
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    super.onWindowEnterFullScreen();
+    _set(value.copyWith(isFullScreen: true));
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    super.onWindowLeaveFullScreen();
+    _set(value.copyWith(isFullScreen: false));
+  }
+
+  Future<void> toggleMaximized() async {
+    if (await desktopWindow.isFullScreen()) {
+      await desktopWindow.setFullScreen(false);
+    } else if (await desktopWindow.isMaximized()) {
+      await desktopWindow.unmaximize();
+    } else {
+      await desktopWindow.maximize();
+    }
+  }
+
+  Future<void> togglePin() async {
+    final isPinned = await desktopWindow.isAlwaysOnTop();
+    await desktopWindow.setAlwaysOnTop(!isPinned);
+    _set(value.copyWith(isPinned: await desktopWindow.isAlwaysOnTop()));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    desktopWindow.removeListener(this);
+    super.dispose();
+  }
+}
+
+class WindowHeader extends ConsumerStatefulWidget {
+  const WindowHeader({super.key});
+
+  @override
+  ConsumerState<WindowHeader> createState() => _WindowHeaderState();
+}
+
+class _WindowHeaderState extends ConsumerState<WindowHeader> {
+  final caption = WindowCaptionController();
+
+  @override
+  void dispose() {
+    caption.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: ShapeDecoration(
-        color: context.colorScheme.surfaceContainerHighest,
-        shape: RoundedSuperellipseBorder(
-          borderRadius: BorderRadius.circular(14),
+    final translucent =
+        ref.watch(windowBlurProvider) && !ref.watch(isMobileViewProvider);
+    return WindowHeaderBar(
+      height: kHeaderHeight,
+      translucent: translucent,
+      onDragStart: desktopWindow.startDragging,
+      onDoubleTap: caption.toggleMaximized,
+      title: system.isMacOS ? const Text(appName) : null,
+      actions: system.isMacOS
+          ? null
+          : WindowHeaderActions(
+              state: caption,
+              onPin: caption.togglePin,
+              onMinimize: desktopWindow.minimize,
+              onMaximize: caption.toggleMaximized,
+              onClose: () {
+                ref.read(systemActionProvider.notifier).handleClose();
+              },
+            ),
+    );
+  }
+}
+
+class WindowHeaderBar extends StatelessWidget {
+  const WindowHeaderBar({
+    super.key,
+    required this.height,
+    required this.onDragStart,
+    required this.onDoubleTap,
+    this.translucent = false,
+    this.title,
+    this.actions,
+  });
+
+  final double height;
+  final VoidCallback onDragStart;
+  final VoidCallback onDoubleTap;
+  final bool translucent;
+  final Widget? title;
+  final Widget? actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = context.colorScheme;
+    return Material(
+      color: translucent ? Colors.transparent : null,
+      shape: translucent
+          ? null
+          : Border(bottom: BorderSide(color: colorScheme.outlineVariant)),
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          alignment: AlignmentDirectional.center,
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onPanStart: (_) {
+                  onDragStart();
+                },
+                onDoubleTap: onDoubleTap,
+                child: ColoredBox(
+                  color: translucent
+                      ? colorScheme.surfaceContainer.withValues(
+                          alpha: kSidebarBlurOpacity,
+                        )
+                      : colorScheme.surfaceContainerHighest,
+                ),
+              ),
+            ),
+            if (title != null)
+              Positioned.fill(
+                child: IgnorePointer(child: Center(child: title)),
+              ),
+            if (actions != null)
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: 0,
+                child: IconButtonTheme(
+                  data: IconButtonThemeData(
+                    style: ButtonStyle(
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      minimumSize: WidgetStatePropertyAll(
+                        getCaptionButtonSize(height),
+                      ),
+                      maximumSize: WidgetStatePropertyAll(
+                        getCaptionButtonSize(height),
+                      ),
+                      padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+                      shape: const WidgetStatePropertyAll(AppShape.none),
+                      foregroundColor: WidgetStatePropertyAll(
+                        context.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  child: actions!,
+                ),
+              ),
+          ],
         ),
       ),
-      padding: const EdgeInsets.all(8),
-      child: Transform.translate(
-        offset: const Offset(0, -1),
-        child: Image.asset('assets/images/icon.png', width: 34, height: 34),
-      ),
+    );
+  }
+}
+
+class WindowHeaderActions extends StatelessWidget {
+  const WindowHeaderActions({
+    super.key,
+    required this.state,
+    required this.onPin,
+    required this.onMinimize,
+    required this.onMaximize,
+    required this.onClose,
+  });
+
+  final ValueListenable<WindowCaptionState> state;
+  final VoidCallback onPin;
+  final VoidCallback onMinimize;
+  final VoidCallback onMaximize;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final appLocalizations = context.appLocalizations;
+    return ValueListenableBuilder(
+      valueListenable: state,
+      builder: (_, state, _) {
+        final (maximizeGlyph, maximizeTooltip) = switch (state) {
+          WindowCaptionState(isFullScreen: true) => (
+            CaptionGlyph.restore,
+            appLocalizations.exitFullScreen,
+          ),
+          WindowCaptionState(isMaximized: true) => (
+            CaptionGlyph.restore,
+            appLocalizations.unmaximize,
+          ),
+          _ => (CaptionGlyph.maximize, appLocalizations.maximize),
+        };
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AspectRatio(
+              aspectRatio: 1,
+              child: IconButton(
+                tooltip: state.isPinned
+                    ? appLocalizations.unpinWindow
+                    : appLocalizations.pinWindow,
+                style: const ButtonStyle(
+                  shape: WidgetStatePropertyAll(CircleBorder()),
+                  minimumSize: WidgetStatePropertyAll(Size.zero),
+                  maximumSize: WidgetStatePropertyAll(Size.infinite),
+                  iconSize: WidgetStatePropertyAll(pinIconSize),
+                ),
+                onPressed: onPin,
+                icon: AnimatedGlyph(
+                  glyph: AppGlyphs.pin,
+                  filled: state.isPinned,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: appLocalizations.minimize,
+              onPressed: onMinimize,
+              icon: const CaptionIcon(CaptionGlyph.minimize),
+            ),
+            IconButton(
+              tooltip: maximizeTooltip,
+              onPressed: onMaximize,
+              icon: CaptionIcon(maximizeGlyph),
+            ),
+            IconButton(
+              tooltip: appLocalizations.close,
+              style: ButtonStyle(
+                backgroundColor: WidgetStateProperty.resolveWith((states) {
+                  final active =
+                      states.contains(WidgetState.hovered) ||
+                      states.contains(WidgetState.pressed);
+                  return active ? context.colorScheme.error : null;
+                }),
+                foregroundColor: WidgetStateProperty.resolveWith((states) {
+                  final active =
+                      states.contains(WidgetState.hovered) ||
+                      states.contains(WidgetState.pressed);
+                  return active ? context.colorScheme.onError : null;
+                }),
+                overlayColor: WidgetStateProperty.resolveWith((states) {
+                  return states.contains(WidgetState.pressed)
+                      ? context.colorScheme.onError.opacity12
+                      : Colors.transparent;
+                }),
+              ),
+              onPressed: onClose,
+              icon: const CaptionIcon(CaptionGlyph.close),
+            ),
+          ],
+        );
+      },
     );
   }
 }

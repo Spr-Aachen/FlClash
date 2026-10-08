@@ -1,29 +1,48 @@
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/common/theme.dart';
+import 'package:fl_clash/icons/icons.dart';
 import 'package:fl_clash/l10n/l10n.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
 import 'package:fl_clash/views/profiles/profiles.dart';
 import 'package:fl_clash/widgets/widgets.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-class _TestProfiles extends Profiles {
-  final List<Profile> initial;
+import '../helpers/glyph_finders.dart';
+import '../helpers/test_profiles.dart';
 
-  _TestProfiles(this.initial);
+Profile urlProfile(String label) =>
+    Profile.normal(label: label, url: 'https://example.com/sub').copyWith(
+      subscriptionInfo: const SubscriptionInfo(
+        upload: 1024,
+        download: 2048,
+        total: 4096,
+        expire: 1234567890,
+      ),
+    );
+
+class _RecordingProfilesAction extends ProfilesAction {
+  final List<Profile> users;
+  final deleted = <int>[];
+
+  _RecordingProfilesAction(this.users);
 
   @override
-  List<Profile> build() => initial;
+  Future<List<Profile>> providerUsers(Profile profile) async => users;
+
+  @override
+  Future<void> deleteProfile(int id) async => deleted.add(id);
 }
 
 Future<ProviderContainer> pumpProfiles(
   WidgetTester tester, {
   required List<Profile> profiles,
+  List<Override> overrides = const [],
 }) async {
   tester.view.physicalSize = const Size(900, 800);
   tester.view.devicePixelRatio = 1;
@@ -32,22 +51,23 @@ Future<ProviderContainer> pumpProfiles(
 
   final container = ProviderContainer(
     overrides: [
-      profilesProvider.overrideWith(() => _TestProfiles(profiles)),
+      profilesProvider.overrideWith(() => TestProfiles(profiles)),
       currentProfileIdProvider.overrideWithBuild((_, _) => profiles.first.id),
+      ...overrides,
     ],
   );
   addTearDown(container.dispose);
   globalState.container = container;
+  container.read(viewSizeProvider.notifier).value = const Size(900, 800);
 
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
+        navigatorKey: globalState.navigatorKey,
         localizationsDelegates: const [
           AppLocalizations.delegate,
-          GlobalMaterialLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
+          ...GlobalMaterialLocalizations.delegates,
         ],
         supportedLocales: AppLocalizations.delegate.supportedLocales,
         builder: (context, child) {
@@ -67,15 +87,6 @@ void main() {
   testWidgets('arrow right from a profile card focuses its more button', (
     tester,
   ) async {
-    Profile urlProfile(String label) =>
-        Profile.normal(label: label, url: 'https://example.com/sub').copyWith(
-          subscriptionInfo: const SubscriptionInfo(
-            upload: 1024,
-            download: 2048,
-            total: 4096,
-            expire: 1234567890,
-          ),
-        );
     final profiles = [
       urlProfile('url 1'),
       Profile.normal(label: 'file 1'),
@@ -118,5 +129,57 @@ void main() {
         Key(profiles[profileIndex].id.toString()),
       );
     }
+  });
+
+  testWidgets('subscription menu item opens the usage dialog', (tester) async {
+    await pumpProfiles(tester, profiles: [urlProfile('url')]);
+
+    final profileItem = find.ancestor(
+      of: find.text('url'),
+      matching: find.byType(ListItem),
+    );
+    await tester.tap(
+      find.descendant(of: profileItem, matching: find.byGlyph(AppGlyphs.more)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(currentAppLocalizations.more).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(currentAppLocalizations.subscriptionInfo));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(CommonDialog), findsOneWidget);
+    expect(find.byType(SubscriptionInfoDetailView), findsOneWidget);
+    expect(find.text(currentAppLocalizations.subscriptionInfo), findsOneWidget);
+  });
+
+  testWidgets('a profile another one uses as a provider is not deleted', (
+    tester,
+  ) async {
+    final action = _RecordingProfilesAction([Profile.normal(label: 'Work')]);
+    await pumpProfiles(
+      tester,
+      profiles: [urlProfile('Home')],
+      overrides: [profilesActionProvider.overrideWith(() => action)],
+    );
+
+    final profileItem = find.ancestor(
+      of: find.text('Home'),
+      matching: find.byType(ListItem),
+    );
+    await tester.tap(
+      find.descendant(of: profileItem, matching: find.byGlyph(AppGlyphs.more)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(currentAppLocalizations.delete));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Home is still used'), findsOneWidget);
+    expect(find.textContaining('of Work'), findsOneWidget);
+    expect(find.text(currentAppLocalizations.cancel), findsNothing);
+    await tester.tap(find.text(currentAppLocalizations.confirm));
+    await tester.pumpAndSettle();
+
+    expect(action.deleted, isEmpty);
   });
 }

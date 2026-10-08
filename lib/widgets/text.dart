@@ -1,8 +1,10 @@
 import 'package:emoji_regex/emoji_regex.dart';
+import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../state.dart';
+import 'builder.dart';
 
 class TooltipText extends StatelessWidget {
   final Text text;
@@ -28,6 +30,26 @@ class TooltipText extends StatelessWidget {
         }
         return text;
       },
+    );
+  }
+}
+
+class TooltipLabel extends StatelessWidget {
+  final String text;
+  final TextStyle? style;
+  final int maxLines;
+
+  const TooltipLabel(this.text, {super.key, this.style, this.maxLines = 2});
+
+  @override
+  Widget build(BuildContext context) {
+    return TooltipText(
+      text: Text(
+        text,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: DefaultTextStyle.of(context).style.merge(style),
+      ),
     );
   }
 }
@@ -108,7 +130,9 @@ class EmojiText extends StatelessWidget {
       spans.add(
         TextSpan(
           text: match.group(0),
-          style: style?.copyWith(fontFamily: FontFamily.twEmoji.value),
+          style: (style ?? const TextStyle()).copyWith(
+            fontFamily: FontFamily.twEmoji.value,
+          ),
         ),
       );
       lastMatchEnd = match.end;
@@ -122,11 +146,37 @@ class EmojiText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RichText(
-      textScaler: MediaQuery.of(context).textScaler,
+    return Text.rich(
+      TextSpan(children: _buildTextSpans(text)),
       maxLines: maxLines,
       overflow: overflow ?? TextOverflow.clip,
-      text: TextSpan(children: _buildTextSpans(text)),
+    );
+  }
+}
+
+class LastUpdateTimeText extends StatelessWidget {
+  final DateTime? lastUpdateDate;
+  final TextStyle? style;
+
+  const LastUpdateTimeText({
+    super.key,
+    required this.lastUpdateDate,
+    this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (lastUpdateDate == null) {
+      return Text('', style: style);
+    }
+    return TickBuilder(
+      duration: const Duration(minutes: 1),
+      builder: (context, _) {
+        return Text(
+          lastUpdateDate!.getLastUpdateTimeDesc(context),
+          style: style,
+        );
+      },
     );
   }
 }

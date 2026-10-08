@@ -143,7 +143,7 @@ void main() {
         },
       );
       var completed = false;
-      setupFuture.then((_) => completed = true);
+      unawaited(setupFuture.then((_) => completed = true));
       await Future<void>.delayed(Duration.zero);
 
       expect(events, ['setup', 'preload']);
@@ -157,9 +157,19 @@ void main() {
   group('proxy methods', () {
     test('changeProxy delegates to interface', () async {
       const params = ChangeProxyParams(groupName: 'G1', proxyName: 'P1');
-      when(() => mock.changeProxy(params)).thenAnswer((_) async => 'ok');
-      final result = await controller.changeProxy(params);
-      expect(result, 'ok');
+      const result = ChangeProxyResult(changed: true);
+      when(() => mock.changeProxy(params)).thenAnswer((_) async => result);
+      expect(await controller.changeProxy(params), result);
+    });
+
+    test('watchRoute delegates to interface', () async {
+      const snapshot = RouteSnapshot(
+        coreEpoch: 3,
+        picksVersion: 1,
+        picks: {'Proxy': 'HK-01'},
+      );
+      when(() => mock.watchRoute(true)).thenAnswer((_) async => snapshot);
+      expect(await controller.watchRoute(true), snapshot);
     });
   });
 
@@ -243,27 +253,23 @@ void main() {
       expect(result.down, 4);
     });
 
-    test('getMemory delegates numeric memory', () async {
-      when(() => mock.getMemory()).thenAnswer((_) async => 2048);
-      final result = await controller.getMemory();
-      expect(result, 2048);
+    test('getMemoryStats delegates the structured stats', () async {
+      when(
+        () => mock.getMemoryStats(),
+      ).thenAnswer((_) async => const CoreMemoryStats(rss: 2048));
+      final result = await controller.getMemoryStats();
+      expect(result?.rss, 2048);
     });
   });
 
   group('misc methods', () {
-    test('getCountryCode returns null on empty string', () async {
-      when(() => mock.getCountryCode(any())).thenAnswer((_) async => '');
-      final result = await controller.getCountryCode('8.8.8.8');
-      expect(result, isNull);
-    });
-
     test('getDelay delegates structured delay', () async {
       when(() => mock.asyncTestDelay(any(), any())).thenAnswer(
         (_) async => const Delay(name: 'P1', value: 100, url: 'test.com'),
       );
       final result = await controller.getDelay('test.com', 'P1');
-      expect(result.name, 'P1');
-      expect(result.value, 100);
+      expect(result?.name, 'P1');
+      expect(result?.value, 100);
     });
 
     test('startListener delegates', () async {

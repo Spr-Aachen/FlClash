@@ -93,7 +93,7 @@ final class WindowSettingProvider
   }
 }
 
-String _$windowSettingHash() => r'563249378a248ed631ade7157b3a0c5289186d10';
+String _$windowSettingHash() => r'b466fe4c113bb896939b5f0c96795cb09dd2759a';
 
 abstract class _$WindowSetting extends $Notifier<WindowProps> {
   WindowProps build();
@@ -423,6 +423,57 @@ abstract class _$OverrideDns extends $Notifier<bool> {
   }
 }
 
+@ProviderFor(OverrideNtp)
+final overrideNtpProvider = OverrideNtpProvider._();
+
+final class OverrideNtpProvider extends $NotifierProvider<OverrideNtp, bool> {
+  OverrideNtpProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'overrideNtpProvider',
+        isAutoDispose: true,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$overrideNtpHash();
+
+  @$internal
+  @override
+  OverrideNtp create() => OverrideNtp();
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(bool value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<bool>(value),
+    );
+  }
+}
+
+String _$overrideNtpHash() => r'9ff34d39ed6adf60ce1a059edad8784f15fe5591';
+
+abstract class _$OverrideNtp extends $Notifier<bool> {
+  bool build();
+  @$mustCallSuper
+  @override
+  WhenComplete runBuild() {
+    final ref = this.ref as $Ref<bool, bool>;
+    final element =
+        ref.element
+            as $ClassProviderElement<
+              AnyNotifier<bool, bool>,
+              bool,
+              Object?,
+              Object?
+            >;
+    return element.handleCreate(ref, build);
+  }
+}
+
 @ProviderFor(HotKeyActions)
 final hotKeyActionsProvider = HotKeyActionsProvider._();
 
@@ -670,4 +721,4 @@ final class _ConfigProvider extends $FunctionalProvider<Config, Config, Config>
   }
 }
 
-String _$_configHash() => r'7f29da1e31a3393fb36ab43c21f0d1b38223afec';
+String _$_configHash() => r'654d23a6e5572e1368724378204e2b14087dad71';

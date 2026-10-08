@@ -1,4 +1,5 @@
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/icons/icons.dart';
 import 'package:fl_clash/l10n/l10n.dart';
 import 'package:fl_clash/manager/hotkey_manager.dart';
 import 'package:fl_clash/models/models.dart';
@@ -7,11 +8,12 @@ import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
 import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../helpers/glyph_finders.dart';
 
 void main() {
   testWidgets('desktop escape runs the back flow and exits search', (
@@ -29,9 +31,7 @@ void main() {
           navigatorKey: globalState.navigatorKey,
           localizationsDelegates: const [
             AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           supportedLocales: AppLocalizations.delegate.supportedLocales,
           home: HotKeyManager(
@@ -50,7 +50,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byIcon(Icons.search));
+    await tester.tap(find.byGlyph(AppGlyphs.search));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsOneWidget);
 
@@ -92,7 +92,7 @@ void main() {
           NavigationItemsState(
             value: [
               NavigationItem(
-                icon: const Icon(Icons.space_dashboard),
+                glyph: AppGlyphs.dashboard,
                 label: PageLabel.dashboard,
                 builder: (_) => CommonScaffold(
                   key: const GlobalObjectKey(PageLabel.dashboard),
@@ -106,7 +106,7 @@ void main() {
                 ),
               ),
               NavigationItem(
-                icon: const Icon(Icons.construction),
+                glyph: AppGlyphs.tools,
                 label: PageLabel.tools,
                 builder: (_) => const SizedBox.shrink(),
               ),
@@ -128,9 +128,7 @@ void main() {
         child: MaterialApp(
           localizationsDelegates: const [
             AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
+            ...GlobalMaterialLocalizations.delegates,
           ],
           supportedLocales: AppLocalizations.delegate.supportedLocales,
           home: const HomePage(),
@@ -138,9 +136,9 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationSidebar), findsOneWidget);
 
-    await tester.tap(find.byIcon(Icons.search));
+    await tester.tap(find.byGlyph(AppGlyphs.search));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'needle');

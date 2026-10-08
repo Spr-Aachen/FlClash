@@ -68,6 +68,18 @@ void main() {
     });
   });
 
+  group('StringExtension.countryFlagEmoji', () {
+    test('maps a two-letter region code to its flag', () {
+      expect('us'.countryFlagEmoji, '🇺🇸');
+    });
+
+    test('leaves anything but two ASCII letters untouched', () {
+      expect('1A'.countryFlagEmoji, '1A');
+      expect('É1'.countryFlagEmoji, 'É1');
+      expect('USA'.countryFlagEmoji, 'USA');
+    });
+  });
+
   group('StringExtension.safeSubstring', () {
     test('returns empty for empty string', () {
       expect(''.safeSubstring(0), '');
@@ -195,6 +207,35 @@ void main() {
       expect(encoded[3], 0x00);
       expect(encoded[4], 0x42);
       expect(encoded[5], 0x00);
+    });
+  });
+
+  group('StringExtension.decodeJson', () {
+    test('decodes small json on main thread', () async {
+      final result = await '{"key": "value"}'
+          .decodeJson<Map<String, dynamic>>();
+      expect(result, {'key': 'value'});
+    });
+
+    test('decodes list json', () async {
+      final result = await '[1, 2, 3]'.decodeJson<List<dynamic>>();
+      expect(result, [1, 2, 3]);
+    });
+  });
+  group('StringExtension.fileStem', () {
+    test('drops only the last extension', () {
+      expect('my.script.js'.fileStem, 'my.script');
+      expect('script'.fileStem, 'script');
+      expect('.hidden'.fileStem, '.hidden');
+      expect(''.fileStem, '');
+    });
+  });
+
+  group('StringExtension.take', () {
+    test('cuts to the length without throwing on short strings', () {
+      expect('abcdef'.take(3), 'abc');
+      expect('ab'.take(3), 'ab');
+      expect(''.take(3), '');
     });
   });
 }

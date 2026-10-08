@@ -1,14 +1,13 @@
-import 'package:fl_clash/common/common.dart';
-import 'package:fl_clash/core/core.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
-import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/widgets.dart';
+
+const proxyGridSpacing = 8.0;
 
 double get listHeaderHeight {
   final measure = globalState.measure;
-  return 20 + measure.titleMediumHeight + 4 + measure.bodyMediumHeight + 2;
+  return 20 + measure.titleSmallHeight + 2 + measure.labelSmallHeight + 2;
 }
 
 double getItemHeight(ProxyCardType proxyCardType) {
@@ -22,89 +21,51 @@ double getItemHeight(ProxyCardType proxyCardType) {
   };
 }
 
-List<Group> getCurrentGroups() {
-  return globalState.container.read(currentGroupsStateProvider).value;
+double getRowExtent(ProxyCardType proxyCardType) =>
+    getItemHeight(proxyCardType) + proxyGridSpacing;
+
+class GroupOffsets {
+  const GroupOffsets(this.groups, this.offsets);
+
+  static const empty = GroupOffsets(<Group>[], <double>[]);
+
+  final List<Group> groups;
+  final List<double> offsets;
+
+  bool get isEmpty => offsets.isEmpty;
+
+  double offsetOf(String groupName) {
+    final index = groups.indexWhere((group) => group.name == groupName);
+    if (index < 0 || index >= offsets.length) {
+      return 0;
+    }
+    return offsets[index];
+  }
+
+  Group? groupOf(String groupName) => groups.getGroup(groupName);
 }
 
-List<Group> getGroups() {
-  return globalState.container.read(groupsProvider);
+double? selectedRowOffset({
+  required List<Proxy> proxies,
+  required String? selectedProxyName,
+  required int columns,
+  required double rowExtent,
+}) {
+  final index = proxies.indexWhere((proxy) => proxy.name == selectedProxyName);
+  if (index < 0) {
+    return null;
+  }
+  return (index ~/ columns) * rowExtent;
 }
 
-void updateCurrentGroupName(String groupName) {
-  globalState.container
-      .read(proxiesActionProvider.notifier)
-      .updateCurrentGroupName(groupName);
-}
-
-void updateCurrentUnfoldSet(Set<String> value) {
-  globalState.container
-      .read(proxiesActionProvider.notifier)
-      .updateCurrentUnfoldSet(value);
-}
-
-Future<void> proxyDelayTest(Proxy proxy, [String? testUrl]) async {
-  final ref = globalState.container;
-  final groups = getGroups();
-  final selectedMap = ref.read(
-    currentProfileProvider.select((state) => state?.selectedMap ?? {}),
-  );
-  final state = computeRealSelectedProxyState(
-    proxy.name,
-    groups: groups,
-    selectedMap: selectedMap,
-  );
-  final currentTestUrl = state.testUrl.takeFirstValid([
-    ref.read(realTestUrlProvider(testUrl)),
-  ]);
-  if (state.proxyName.isEmpty) {
+void animateScrollTo(ScrollController controller, double offset) {
+  if (!controller.hasClients) {
     return;
   }
-  ref
-      .read(proxiesActionProvider.notifier)
-      .setDelay(Delay(url: currentTestUrl, name: state.proxyName, value: 0));
-  try {
-    final delay = await coreController.getDelay(
-      currentTestUrl,
-      state.proxyName,
-    );
-    ref.read(proxiesActionProvider.notifier).setDelay(delay);
-  } catch (error) {
-    commonPrint.log(
-      'Delay test failed for ${state.proxyName}: $error',
-      logLevel: coreFailureLogLevel(error),
-    );
-    ref
-        .read(proxiesActionProvider.notifier)
-        .setDelay(Delay(url: currentTestUrl, name: state.proxyName, value: -1));
-  }
-}
-
-Future<void> delayTest(List<Proxy> proxies, [String? testUrl]) async {
-  final batches = proxies.batch(maxConcurrentDelayTests);
-  for (final batch in batches) {
-    await Future.wait(
-      batch.map((proxy) async {
-        await proxyDelayTest(proxy, testUrl);
-      }),
-    );
-  }
-  globalState.container.read(sortNumProvider.notifier).add();
-}
-
-double getScrollToSelectedOffset({
-  required String groupName,
-  required List<Proxy> proxies,
-  required int columns,
-}) {
-  final ref = globalState.container;
-  final proxyCardType = ref.read(
-    proxiesStyleSettingProvider.select((state) => state.cardType),
+  final position = controller.position;
+  controller.animateTo(
+    offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+    duration: const Duration(milliseconds: 300),
+    curve: Curves.easeOutCubic,
   );
-  final selectedProxyName = ref.read(selectedProxyNameProvider(groupName));
-  final findSelectedIndex = proxies.indexWhere(
-    (proxy) => proxy.name == selectedProxyName,
-  );
-  final selectedIndex = findSelectedIndex != -1 ? findSelectedIndex : 0;
-  final rows = (selectedIndex / columns).floor();
-  return rows * getItemHeight(proxyCardType) + (rows - 1) * 8;
 }

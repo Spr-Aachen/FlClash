@@ -1,11 +1,13 @@
 import 'dart:math';
 
 import 'package:fl_clash/providers/app.dart';
-import 'package:flutter/material.dart';
+import 'package:fl_clash/common/shape.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class CommonDialog extends ConsumerWidget {
   final String title;
+  final Widget? trailing;
   final Widget? child;
   final List<Widget>? actions;
   final EdgeInsets? padding;
@@ -15,6 +17,7 @@ class CommonDialog extends ConsumerWidget {
   const CommonDialog({
     super.key,
     required this.title,
+    this.trailing,
     this.actions,
     this.child,
     this.padding,
@@ -26,8 +29,16 @@ class CommonDialog extends ConsumerWidget {
   Widget build(BuildContext context, ref) {
     final size = ref.watch(viewSizeProvider);
     return AlertDialog(
-      title: Text(title),
+      title: trailing == null
+          ? Text(title)
+          : Row(
+              children: [
+                Expanded(child: Text(title)),
+                trailing!,
+              ],
+            ),
       actions: actions,
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
       contentPadding: padding,
       backgroundColor: backgroundColor,
       content: Container(
@@ -54,7 +65,7 @@ class CommonModal extends ConsumerWidget {
       child: Container(
         width: size.width * 0.85,
         height: size.height * 0.85,
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+        decoration: const ShapeDecoration(shape: AppShape.xxl),
         clipBehavior: Clip.antiAlias,
         child: child,
       ),

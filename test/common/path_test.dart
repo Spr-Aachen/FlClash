@@ -1,14 +1,16 @@
-import 'dart:io';
+﻿import 'dart:io';
 
-import 'package:fl_clash/common/path.dart';
+import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/models/models.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path/path.dart' as p;
+import 'package:path/path.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:yaml/yaml.dart';
 
 class _FakePathProvider extends PathProviderPlatform {
-  final String root;
-
   _FakePathProvider(this.root);
+
+  final String root;
 
   @override
   Future<String?> getTemporaryPath() async => root;
@@ -21,110 +23,288 @@ class _FakePathProvider extends PathProviderPlatform {
 }
 
 void main() {
-  late Directory tempDir;
-  late Directory appDir;
-  late Directory supportDir;
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() {
-    tempDir = Directory.systemTemp.createTempSync('path_test');
-    appDir = Directory('${tempDir.path}/app')..createSync(recursive: true);
-    supportDir = Directory('${tempDir.path}/support')
-      ..createSync(recursive: true);
-    PathProviderPlatform.instance = _FakePathProvider(supportDir.path);
+  late Directory root;
+
+  setUpAll(() {
+    root = Directory.systemTemp.createTempSync('path_test');
+    PathProviderPlatform.instance = _FakePathProvider(root.path);
   });
 
-  tearDown(() {
-    try {
-      tempDir.deleteSync(recursive: true);
-    } catch (_) {}
+  tearDownAll(() {
+    if (root.existsSync()) {
+      root.deleteSync(recursive: true);
+    }
   });
 
-  group('AppPath portable detection', () {
-    test('detects portable mode when config/ exists next to the executable', () async {
-      Directory('${appDir.path}/config').createSync();
-      AppPath.resetInstanceForTest(appDirPath: appDir.path);
-      addTearDown(AppPath.resetInstanceForTest);
+  test('provider directories match the paths handed to the core', () async {
+    const proxiesUrl = 'https://example.com/a.yaml';
+    const rulesUrl = 'https://example.com/b.yaml';
+    final proxiesDir = await appPath.getProviderDirPath(
+      7,
+      proxiesProviderDirectoryName,
+    );
+    final rulesDir = await appPath.getProviderDirPath(
+      7,
+      rulesProviderDirectoryName,
+    );
 
-      final path = AppPath();
-      await path.homeDirPath;
+    final result = await makeRealProfileTask(
+      MakeRealProfileState(
+        profilesPath: await appPath.profilesPath,
+        profileId: 7,
+        rawConfig: {
+          'proxy-providers': {
+            'a': {'type': 'http', 'url': proxiesUrl},
+          },
+          'rule-providers': {
+            'b': {'type': 'http', 'url': rulesUrl},
+          },
+        },
+        realPatchConfig: const PatchClashConfig(),
+        overrideDns: false,
+        overrideNtp: false,
+        appendSystemDns: false,
+        proxyGroups: const [],
+        rules: const [],
+        addedRules: const [],
+        defaultUA: 'FlClash',
+      ),
+    );
+    final config = loadYaml(result.yaml) as YamlMap;
+
+    expect(
+      config['proxy-providers']['a']['path'],
+      join(proxiesDir, 'a@$proxiesUrl'.toMd5()),
+    );
+    expect(
+      config['rule-providers']['b']['path'],
+      join(rulesDir, 'b@$rulesUrl'.toMd5()),
+    );
+  });
+
+  test('confines a provider path the profile tried to choose', () async {
+    final proxiesDir = await appPath.getProviderDirPath(
+      7,
+      proxiesProviderDirectoryName,
+    );
+    final rulesDir = await appPath.getProviderDirPath(
+      7,
+      rulesProviderDirectoryName,
+    );
+
+    final result = await makeRealProfileTask(
+      MakeRealProfileState(
+        profilesPath: await appPath.profilesPath,
+        profileId: 7,
+        rawConfig: {
+          'proxy-providers': {
+            'escape': {'type': 'file', 'path': '../../../../config.yaml'},
+            'urlless': {'type': 'http', 'path': 'cache.db'},
+            'literal': {
+              'type': 'inline',
+              'payload': ['DIRECT'],
+            },
+          },
+          'rule-providers': {
+            'sneak': {'type': 'file', 'path': '/etc/hosts'},
+          },
+        },
+        realPatchConfig: const PatchClashConfig(),
+        overrideDns: false,
+        overrideNtp: false,
+        appendSystemDns: false,
+        proxyGroups: const [],
+        rules: const [],
+        addedRules: const [],
+        defaultUA: 'FlClash',
+      ),
+    );
+    final config = loadYaml(result.yaml) as YamlMap;
+
+    expect(
+      config['proxy-providers']['escape']['path'],
+      join(proxiesDir, 'proxy-providers/escape'.toMd5()),
+    );
+    expect(
+      config['proxy-providers']['urlless']['path'],
+      join(proxiesDir, 'proxy-providers/urlless'.toMd5()),
+    );
+    expect(config['proxy-providers']['literal']['path'], isNull);
+    expect(
+      config['rule-providers']['sneak']['path'],
+      join(rulesDir, 'rule-providers/sneak'.toMd5()),
+    );
+  });
+
+  test('survives a provider section that is not a map', () async {
+    final result = await makeRealProfileTask(
+      MakeRealProfileState(
+        profilesPath: await appPath.profilesPath,
+        profileId: 7,
+        rawConfig: {
+          'proxy-providers': ['not-a-map'],
+          'rule-providers': {
+            'broken': ['also-not-a-map'],
+          },
+        },
+        realPatchConfig: const PatchClashConfig(),
+        overrideDns: false,
+        overrideNtp: false,
+        appendSystemDns: false,
+        proxyGroups: const [],
+        rules: const [],
+        addedRules: const [],
+        defaultUA: 'FlClash',
+      ),
+    );
+
+    expect(result.yaml, isNotEmpty);
+  });
+
+  test('ensureProviderDirs creates both provider directories', () async {
+    await appPath.ensureProviderDirs(9);
+
+    for (final type in const [
+      proxiesProviderDirectoryName,
+      rulesProviderDirectoryName,
+    ]) {
+      expect(
+        Directory(await appPath.getProviderDirPath(9, type)).existsSync(),
+        isTrue,
+      );
+    }
+
+    await expectLater(appPath.ensureProviderDirs(9), completes);
+  });
+
+  group('portable mode', () {
+    final savedExecutableDirectory = AppPath.executableDirectory;
+    final savedSupportDirectory = AppPath.supportDirectory;
+    final savedTemporaryDirectory = AppPath.temporaryDirectory;
+    final savedCacheDirectory = AppPath.cacheDirectory;
+
+    late Directory portableRoot;
+    late Directory appDir;
+    late Directory systemDir;
+
+    setUp(() {
+      portableRoot = Directory.systemTemp.createTempSync('portable_path_test');
+      appDir = Directory(join(portableRoot.path, 'app'))
+        ..createSync(recursive: true);
+      systemDir = Directory(join(portableRoot.path, 'system'))
+        ..createSync(recursive: true);
+      AppPath.executableDirectory = () => appDir.path;
+      AppPath.supportDirectory = () async => systemDir;
+      AppPath.temporaryDirectory = () async => portableRoot;
+      AppPath.cacheDirectory = () async => portableRoot;
+    });
+
+    tearDown(() {
+      AppPath.executableDirectory = savedExecutableDirectory;
+      AppPath.supportDirectory = savedSupportDirectory;
+      AppPath.temporaryDirectory = savedTemporaryDirectory;
+      AppPath.cacheDirectory = savedCacheDirectory;
+      if (portableRoot.existsSync()) {
+        portableRoot.deleteSync(recursive: true);
+      }
+    });
+
+    Directory createPortableDir() {
+      return Directory(join(appDir.path, portableDirectoryName))
+        ..createSync(recursive: true);
+    }
+
+    test('a config directory beside the executable is portable', () async {
+      final configDir = createPortableDir();
+      final path = AppPath.forTest();
 
       expect(path.isPortable, isTrue);
-      expect(await path.homeDirPath, p.join(appDir.path, 'config'));
-      expect(await path.databasePath, p.join(appDir.path, 'config', 'database.sqlite'));
+      expect(await path.homeDirPath, configDir.path);
+      expect(await path.databasePath, join(configDir.path, 'database.sqlite'));
+      expect(
+        await path.sharedPreferencesPath,
+        join(configDir.path, 'shared_preferences.json'),
+      );
     });
 
-    test('falls back to the application support directory without config/', () async {
-      AppPath.resetInstanceForTest(appDirPath: appDir.path);
-      addTearDown(AppPath.resetInstanceForTest);
-
-      final path = AppPath();
-      await path.homeDirPath;
+    test('without one it keeps the system data directory', () async {
+      final path = AppPath.forTest();
 
       expect(path.isPortable, isFalse);
-      expect(await path.homeDirPath, supportDir.path);
+      expect(await path.homeDirPath, systemDir.path);
     });
 
-    test('redirects cache into the portable config dir', () async {
-      Directory('${appDir.path}/config').createSync();
-      AppPath.resetInstanceForTest(appDirPath: appDir.path);
-      addTearDown(AppPath.resetInstanceForTest);
-
-      final path = AppPath();
-
-      expect((await path.cacheDir.future).path, p.join(appDir.path, 'config', '.cache'));
-    });
-
-    test('migrates legacy system data into a fresh portable config dir', () async {
-      final legacyDir = Directory('${tempDir.path}/legacy')..createSync();
-      final configDir = Directory('${appDir.path}/config')..createSync();
-      File('${legacyDir.path}/shared_preferences.json').writeAsStringSync(
-        '{"version":1}',
+    test('the first run brings the installed data along', () async {
+      final configDir = createPortableDir();
+      File(join(systemDir.path, 'database.sqlite')).writeAsBytesSync([1, 2, 3]);
+      File(join(systemDir.path, 'database.sqlite-wal')).writeAsBytesSync([4]);
+      File(join(systemDir.path, 'config.yaml')).writeAsStringSync('mode: rule');
+      File(join(systemDir.path, 'shared_preferences.json')).writeAsStringSync(
+        '{"flutter.version":1}',
       );
-      File('${legacyDir.path}/database.sqlite').writeAsBytesSync([1, 2, 3]);
-      Directory('${legacyDir.path}/profiles').createSync();
-      File('${legacyDir.path}/profiles/default.yaml').writeAsStringSync(
-        'mixed-port: 7890',
+      Directory(join(systemDir.path, 'profiles')).createSync();
+      File(join(systemDir.path, 'profiles', 'default.yaml')).writeAsStringSync(
+        'proxies: []',
       );
+      Directory(join(systemDir.path, 'scripts')).createSync();
+      File(join(systemDir.path, 'scripts', 'patch.js')).writeAsStringSync('//');
 
-      AppPath.resetInstanceForTest(
-        appDirPath: appDir.path,
-        legacyDir: legacyDir,
-      );
-      addTearDown(AppPath.resetInstanceForTest);
-
-      final path = AppPath();
+      final path = AppPath.forTest();
+      expect(path.isPortable, isTrue);
+      // The copy runs behind dataDir, so wait for the directory it resolves to.
       await path.homeDirPath;
 
       expect(
-        File('${configDir.path}/shared_preferences.json').existsSync(),
+        File(join(configDir.path, 'database.sqlite')).readAsBytesSync(),
+        [1, 2, 3],
+        reason: 'a legacy install that crashed still holds rows in its log',
+      );
+      expect(
+        File(join(configDir.path, 'database.sqlite-wal')).readAsBytesSync(),
+        [4],
+      );
+      expect(File(join(configDir.path, 'config.yaml')).existsSync(), isTrue);
+      expect(
+        File(join(configDir.path, 'shared_preferences.json')).existsSync(),
         isTrue,
       );
-      expect(File('${configDir.path}/database.sqlite').existsSync(), isTrue);
       expect(
-        File('${configDir.path}/profiles/default.yaml').existsSync(),
+        File(join(configDir.path, 'profiles', 'default.yaml')).existsSync(),
+        isTrue,
+      );
+      expect(
+        File(join(configDir.path, 'scripts', 'patch.js')).existsSync(),
         isTrue,
       );
     });
 
-    test('migration does not overwrite existing portable data', () async {
-      final legacyDir = Directory('${tempDir.path}/legacy')..createSync();
-      final configDir = Directory('${appDir.path}/config')..createSync();
-      File('${configDir.path}/database.sqlite').writeAsBytesSync([9, 9]);
-      File('${legacyDir.path}/database.sqlite').writeAsBytesSync([1, 2, 3]);
+    test('a later run keeps what the folder already holds', () async {
+      final configDir = createPortableDir();
+      File(join(configDir.path, 'database.sqlite')).writeAsBytesSync([9, 9]);
+      File(join(systemDir.path, 'database.sqlite')).writeAsBytesSync([1, 2, 3]);
 
-      AppPath.resetInstanceForTest(
-        appDirPath: appDir.path,
-        legacyDir: legacyDir,
-      );
-      addTearDown(AppPath.resetInstanceForTest);
-
-      final path = AppPath();
-      await path.homeDirPath;
+      expect(AppPath.forTest().isPortable, isTrue);
 
       expect(
-        File('${configDir.path}/database.sqlite').readAsBytesSync(),
+        File(join(configDir.path, 'database.sqlite')).readAsBytesSync(),
         [9, 9],
       );
+    });
+
+    test('an unusable system directory fails the path, not the app', () async {
+      createPortableDir();
+      AppPath.supportDirectory = () async => throw const FileSystemException(
+        'no support directory',
+      );
+
+      final path = AppPath.forTest();
+
+      // The directory beside the executable decides this on its own, so it
+      // never depends on the system one resolving.
+      expect(path.isPortable, isTrue);
+      await expectLater(path.homeDirPath, throwsA(isA<FileSystemException>()));
     });
   });
 }

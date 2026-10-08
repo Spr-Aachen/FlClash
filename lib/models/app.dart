@@ -21,7 +21,6 @@ abstract class AppState with _$AppState {
     @Default(0) double sideWidth,
     @Default({}) DelayMap delayMap,
     @Default([]) List<Group> groups,
-    @Default(0) int checkIpNum,
     required Brightness brightness,
     int? runTime,
     @Default([]) List<ExternalProvider> providers,
@@ -40,7 +39,7 @@ abstract class AppState with _$AppState {
 }
 
 extension AppStateExt on AppState {
-  ViewMode get viewMode => utils.getViewMode(viewSize.width);
+  ViewMode get viewMode => getViewMode(viewSize.width);
 
   bool get isStart => runTime != null;
 }

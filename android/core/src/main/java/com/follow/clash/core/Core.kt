@@ -11,7 +11,7 @@ object Core {
         stack: String,
         address: String,
         dns: String,
-    )
+    ): Boolean
 
     external fun forceGC()
 
@@ -29,41 +29,36 @@ object Core {
     fun startTun(
         fd: Int,
         protect: (Int) -> Boolean,
-        resolverProcess: (protocol: Int, source: InetSocketAddress, target: InetSocketAddress, uid: Int) -> String,
+        resolveUid: (protocol: Int, source: InetSocketAddress, target: InetSocketAddress) -> Int,
+        resolvePackage: (uid: Int) -> String,
         stack: String,
         address: String,
         dns: String,
-    ) {
-        startTun(
+    ): Boolean {
+        return startTun(
             fd,
             object : TunInterface {
-                override fun protect(fd: Int) {
-                    protect(fd)
-                }
+                override fun protect(fd: Int): Boolean = protect(fd)
 
-                override fun resolverProcess(
+                override fun resolveUid(
                     protocol: Int,
                     source: String,
                     target: String,
-                    uid: Int,
-                ): String {
-                    return resolverProcess(
+                ): Int {
+                    return resolveUid(
                         protocol,
                         parseInetSocketAddress(source),
                         parseInetSocketAddress(target),
-                        uid,
                     )
                 }
+
+                override fun resolvePackage(uid: Int): String = resolvePackage(uid)
             },
             stack,
             address,
             dns,
         )
     }
-
-    external fun suspended(
-        suspended: Boolean,
-    )
 
     private external fun invokeMethod(
         data: String,
@@ -72,12 +67,12 @@ object Core {
 
     fun invokeMethod(
         data: String,
-        cb: (result: String?) -> Unit,
+        cb: (result: ByteArray?) -> Unit,
     ) {
         invokeMethod(
             data,
             object : InvokeInterface {
-                override fun onResult(result: String?) {
+                override fun onResult(result: ByteArray?) {
                     cb(result)
                 }
             },
@@ -94,8 +89,8 @@ object Core {
         } else {
             setEventListener(
                 object : InvokeInterface {
-                    override fun onResult(result: String?) {
-                        callback(result)
+                    override fun onResult(result: ByteArray?) {
+                        callback(result?.decodeToString())
                     }
                 },
             )
@@ -111,8 +106,8 @@ object Core {
             initParamsString,
             setupParamsString,
             object : InvokeInterface {
-                override fun onResult(result: String?) {
-                    callback(result)
+                override fun onResult(result: ByteArray?) {
+                    callback(result?.decodeToString())
                 }
             },
         )

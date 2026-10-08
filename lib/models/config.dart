@@ -1,6 +1,7 @@
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import 'models.dart';
@@ -28,13 +29,37 @@ const defaultBypassDomain = [
   '192.168.*',
 ];
 
+const defaultUserAgents = ['clash-verge/v2.4.2', 'ClashforWindows/0.19.23'];
+
 const defaultAppSettingProps = AppSettingProps();
 const defaultVpnProps = VpnProps();
+const defaultAuthenticationProps = AuthenticationProps();
 const defaultNetworkProps = NetworkProps();
 const defaultProxiesStyleProps = ProxiesStyleProps();
 const defaultWindowProps = WindowProps();
 const defaultAccessControlProps = AccessControlProps();
 const defaultThemeProps = ThemeProps(primaryColor: defaultPrimaryColor);
+
+HotKeyAction _defaultHotKeyAction(HotAction action, PhysicalKeyboardKey key) {
+  return HotKeyAction(
+    action: action,
+    key: key.usbHidUsage,
+    modifiers: const {KeyboardModifier.control, KeyboardModifier.alt},
+  );
+}
+
+// Windows reports AltGr as Ctrl+Alt, and every letter is an AltGr character
+// on some layout (@ on German Q, ś on Polish S), so a default there would fire
+// while the user types.
+final List<HotKeyAction> defaultHotKeyActions = system.isWindows
+    ? const []
+    : [
+        _defaultHotKeyAction(HotAction.view, PhysicalKeyboardKey.keyV),
+        _defaultHotKeyAction(HotAction.start, PhysicalKeyboardKey.keyS),
+        _defaultHotKeyAction(HotAction.mode, PhysicalKeyboardKey.keyM),
+        _defaultHotKeyAction(HotAction.proxy, PhysicalKeyboardKey.keyP),
+        _defaultHotKeyAction(HotAction.delayTest, PhysicalKeyboardKey.keyD),
+      ];
 
 const List<DashboardWidget> defaultDashboardWidgets = [
   DashboardWidget.networkSpeed,
@@ -46,17 +71,51 @@ const List<DashboardWidget> defaultDashboardWidgets = [
   DashboardWidget.intranetIp,
 ];
 
+const _legacyOutboundModeV2 = 'outboundModeV2';
+
 List<DashboardWidget> dashboardWidgetsSafeFormJson(
   List<dynamic>? dashboardWidgets,
 ) {
-  try {
-    return dashboardWidgets
-            ?.map((e) => $enumDecode(_$DashboardWidgetEnumMap, e))
+  return decodeOrRestoreDefault(
+    'dashboard widgets',
+    () =>
+        dashboardWidgets
+            ?.map(
+              (e) => e == _legacyOutboundModeV2
+                  ? DashboardWidget.outboundMode
+                  : $enumDecode(_$DashboardWidgetEnumMap, e),
+            )
+            .toSet()
             .toList() ??
-        defaultDashboardWidgets;
-  } catch (_) {
-    return defaultDashboardWidgets;
+        defaultDashboardWidgets,
+    () => defaultDashboardWidgets,
+  );
+}
+
+Object? _readSidebarExpanded(Map<dynamic, dynamic> json, String key) {
+  return json.containsKey(key) ? json[key] : json['showLabel'];
+}
+
+Object? _readTabAnimation(Map<dynamic, dynamic> json, String key) {
+  if (json.containsKey(key)) {
+    return json[key];
   }
+  return json['isAnimateToPage'] == false ? TabAnimation.fade.name : null;
+}
+
+Object? _readUserAgents(Map<dynamic, dynamic> json, String key) {
+  if (json.containsKey(key)) {
+    return json[key];
+  }
+  final legacy = json['customUserAgent'];
+  if (legacy is! String) {
+    return null;
+  }
+  final custom = legacy.trim();
+  if (custom.isEmpty || defaultUserAgents.contains(custom)) {
+    return null;
+  }
+  return [...defaultUserAgents, custom];
 }
 
 @freezed
@@ -67,15 +126,21 @@ abstract class AppSettingProps with _$AppSettingProps {
     @JsonKey(fromJson: dashboardWidgetsSafeFormJson)
     List<DashboardWidget> dashboardWidgets,
     @Default(false) bool onlyStatisticsProxy,
+    @Default(true) bool showNotificationStopAction,
     @Default(false) bool autoLaunch,
     @Default(false) bool silentLaunch,
     @Default(false) bool autoRun,
     @Default(false) bool openLogs,
     @Default(true) bool closeConnections,
     @Default(defaultTestUrl) String testUrl,
-    @Default(true) bool isAnimateToPage,
+    @Default(TabAnimation.slide)
+    @JsonKey(readValue: _readTabAnimation)
+    TabAnimation tabAnimation,
+    @Default(true) bool floatingNavigationBar,
     @Default(true) bool autoCheckUpdate,
-    @Default(false) bool showLabel,
+    @Default(true)
+    @JsonKey(readValue: _readSidebarExpanded)
+    bool sidebarExpanded,
     @Default(false) bool disclaimerAccepted,
     @Default(false) bool crashlyticsTip,
     @Default(false) bool crashlytics,
@@ -84,20 +149,30 @@ abstract class AppSettingProps with _$AppSettingProps {
     @Default(false) bool developerMode,
     @Default(RestoreStrategy.compatible) RestoreStrategy restoreStrategy,
     @Default(true) bool showTrayTitle,
-    @Default('') String customUserAgent,
+    @Default(true) bool checkCertificate,
+    @Default(defaultUserAgents)
+    @JsonKey(readValue: _readUserAgents)
+    List<String> userAgents,
+    @Default(false) bool hideIp,
+    @Default(false) bool editorLineWrap,
+    @Default(EditorFontSize.standard) EditorFontSize editorFontSize,
+    @Default([]) List<String> serviceOrder,
+    @Default([]) List<String> disabledServices,
+    String? currentService,
   }) = _AppSettingProps;
 
   factory AppSettingProps.fromJson(Map<String, Object?> json) =>
       _$AppSettingPropsFromJson(json);
 
   factory AppSettingProps.safeFromJson(Map<String, Object?>? json) {
-    try {
-      return json == null
-          ? defaultAppSettingProps
-          : AppSettingProps.fromJson(json);
-    } catch (_) {
+    if (json == null) {
       return defaultAppSettingProps;
     }
+    return decodeOrRestoreDefault(
+      'app settings',
+      () => AppSettingProps.fromJson(json),
+      () => defaultAppSettingProps,
+    );
   }
 }
 
@@ -164,6 +239,25 @@ abstract class VpnProps with _$VpnProps {
 }
 
 @freezed
+abstract class AuthenticationProps with _$AuthenticationProps {
+  const factory AuthenticationProps({
+    @Default(false) bool enable,
+    @Default('') String username,
+    @Default('') String password,
+  }) = _AuthenticationProps;
+
+  factory AuthenticationProps.fromJson(Map<String, Object?>? json) =>
+      json == null
+      ? defaultAuthenticationProps
+      : _$AuthenticationPropsFromJson(json);
+}
+
+extension AuthenticationPropsExt on AuthenticationProps {
+  List<String> get credentials =>
+      enable && username.isNotEmpty ? ['$username:$password'] : [];
+}
+
+@freezed
 abstract class NetworkProps with _$NetworkProps {
   const factory NetworkProps({
     @Default(true) bool systemProxy,
@@ -171,10 +265,23 @@ abstract class NetworkProps with _$NetworkProps {
     @Default(RouteMode.config) RouteMode routeMode,
     @Default(true) bool autoSetSystemDns,
     @Default(false) bool appendSystemDns,
+    @Default(defaultAuthenticationProps) AuthenticationProps authentication,
   }) = _NetworkProps;
 
   factory NetworkProps.fromJson(Map<String, Object?>? json) =>
       json == null ? const NetworkProps() : _$NetworkPropsFromJson(json);
+}
+
+/// Reads the styles named `standard`, `icon` and `none` before they became
+/// [ProxiesIconStyle.filled], [ProxiesIconStyle.plain] and
+/// [ProxiesIconStyle.hidden].
+ProxiesIconStyle proxiesIconStyleSafeFromJson(Object? iconStyle) {
+  return switch (iconStyle) {
+    'filled' || 'standard' => ProxiesIconStyle.filled,
+    'plain' || 'icon' => ProxiesIconStyle.plain,
+    'hidden' || 'none' => ProxiesIconStyle.hidden,
+    _ => ProxiesIconStyle.filled,
+  };
 }
 
 @freezed
@@ -183,8 +290,11 @@ abstract class ProxiesStyleProps with _$ProxiesStyleProps {
     @Default(ProxiesType.tab) ProxiesType type,
     @Default(ProxiesSortType.none) ProxiesSortType sortType,
     @Default(ProxiesLayout.standard) ProxiesLayout layout,
-    @Default(ProxiesIconStyle.standard) ProxiesIconStyle iconStyle,
-    @Default(ProxyCardType.expand) ProxyCardType cardType,
+    @Default(ProxiesIconStyle.filled)
+    @JsonKey(fromJson: proxiesIconStyleSafeFromJson)
+    ProxiesIconStyle iconStyle,
+    @Default(ProxyCardType.shrink) ProxyCardType cardType,
+    @Default(false) bool hideTimeoutProxies,
   }) = _ProxiesStyleProps;
 
   factory ProxiesStyleProps.fromJson(Map<String, Object?>? json) => json == null
@@ -211,6 +321,7 @@ abstract class ThemeProps with _$ThemeProps {
     @Default(ThemeMode.dark) ThemeMode themeMode,
     @Default(DynamicSchemeVariant.content) DynamicSchemeVariant schemeVariant,
     @Default(false) bool pureBlack,
+    @Default(true) bool sidebarBlur,
     @Default(TextScale()) TextScale textScale,
   }) = _ThemeProps;
 
@@ -221,11 +332,11 @@ abstract class ThemeProps with _$ThemeProps {
     if (json == null) {
       return defaultThemeProps;
     }
-    try {
-      return ThemeProps.fromJson(json);
-    } catch (_) {
-      return defaultThemeProps;
-    }
+    return decodeOrRestoreDefault(
+      'theme settings',
+      () => ThemeProps.fromJson(json),
+      () => defaultThemeProps,
+    );
   }
 }
 
@@ -234,6 +345,7 @@ abstract class Config with _$Config {
   const factory Config({
     int? currentProfileId,
     @Default(false) bool overrideDns,
+    @Default(false) bool overrideNtp,
     @Default([]) List<HotKeyAction> hotKeyActions,
     @JsonKey(fromJson: AppSettingProps.safeFromJson)
     @Default(defaultAppSettingProps)
@@ -252,7 +364,10 @@ abstract class Config with _$Config {
 
   factory Config.realFromJson(Map<String, Object?>? json) {
     if (json == null) {
-      return const Config(themeProps: defaultThemeProps);
+      return Config(
+        themeProps: defaultThemeProps,
+        hotKeyActions: defaultHotKeyActions,
+      );
     }
     return _$ConfigFromJson(json);
   }
