@@ -13,6 +13,9 @@ const _allTargets = <String, String>{
   'windows': 'exe,zip',
 };
 
+/// The entry `AppPath.portableDirectoryName` is shipped as.
+const _portableDirectoryEntry = 'config/';
+
 const _androidFlutterTarget = {
   'arm': 'android-arm',
   'arm64': 'android-arm64',
@@ -223,12 +226,12 @@ Future<int> _package(
   });
   final exitCode = await process.exitCode;
   if (exitCode == 0 && platform == 'windows') {
-    await _injectPortableConfigDir(rootDir);
+    await _injectPortableDirectory(rootDir);
   }
   return exitCode;
 }
 
-Future<void> _injectPortableConfigDir(String rootDir) async {
+Future<void> _injectPortableDirectory(String rootDir) async {
   final distDir = Directory(p.join(rootDir, 'dist'));
   if (!await distDir.exists()) return;
   await for (final entity in distDir.list(recursive: true)) {
@@ -236,24 +239,23 @@ Future<void> _injectPortableConfigDir(String rootDir) async {
       continue;
     }
     try {
-      await injectPortableConfigDirIntoZip(entity.path);
-      stdout.writeln('Injected config/ into ${entity.path}');
+      await injectPortableDirectoryIntoZip(entity.path);
+      stdout.writeln('Injected $_portableDirectoryEntry into ${entity.path}');
     } catch (e) {
-      stderr.writeln('Failed to inject config/ into ${entity.path}: $e');
+      stderr.writeln('Failed to inject $_portableDirectoryEntry into ${entity.path}: $e');
     }
   }
 }
 
-Future<void> injectPortableConfigDirIntoZip(String zipPath) async {
+Future<void> injectPortableDirectoryIntoZip(String zipPath) async {
   final bytes = await File(zipPath).readAsBytes();
   final archive = ZipDecoder().decodeBytes(bytes);
-  if (archive.find('config/') != null) {
+  if (archive.find(_portableDirectoryEntry) != null) {
     return;
   }
-  archive.addFile(ArchiveFile.directory('config/'));
-  final encoded = ZipEncoder().encode(archive);
+  archive.addFile(ArchiveFile.directory(_portableDirectoryEntry));
   final tmp = File('$zipPath.tmp');
-  await tmp.writeAsBytes(encoded, flush: true);
+  await tmp.writeAsBytes(ZipEncoder().encode(archive), flush: true);
   await tmp.rename(zipPath);
 }
 

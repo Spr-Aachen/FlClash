@@ -77,46 +77,55 @@ hooks:
   });
 
   group('portable zip packaging', () {
-    test('injects an empty config/ entry into a windows zip', () async {
-      final tmp = Directory.systemTemp.createTempSync('setup_zip_test');
-      addTearDown(() {
-        try {
-          tmp.deleteSync(recursive: true);
-        } catch (_) {}
-      });
-      final zipPath = '${tmp.path}/FlClash-0.8.96-windows-amd64.zip';
-      final archive = Archive()
-        ..addFile(ArchiveFile.bytes('FlClash.exe', [1, 2, 3]));
-      await File(zipPath).writeAsBytes(ZipEncoder().encode(archive));
+    late Directory dir;
 
-      await setup.injectPortableConfigDirIntoZip(zipPath);
-
-      final decoded = ZipDecoder().decodeBytes(
-        await File(zipPath).readAsBytes(),
-      );
-      expect(decoded.find('config/'), isNotNull);
-      expect(decoded.find('FlClash.exe'), isNotNull);
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('setup_zip_test');
     });
 
-    test('does not add a duplicate config/ entry when one already exists', () async {
-      final tmp = Directory.systemTemp.createTempSync('setup_zip_test');
-      addTearDown(() {
-        try {
-          tmp.deleteSync(recursive: true);
-        } catch (_) {}
-      });
-      final zipPath = '${tmp.path}/FlClash-0.8.96-windows-amd64.zip';
-      final archive = Archive()
-        ..addFile(ArchiveFile.directory('config/'))
-        ..addFile(ArchiveFile.bytes('FlClash.exe', [1, 2, 3]));
+    tearDown(() {
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    Future<String> writeZip(List<ArchiveFile> entries) async {
+      final zipPath = '${dir.path}/FlClash-windows-amd64.zip';
+      final archive = Archive();
+      for (final entry in entries) {
+        archive.addFile(entry);
+      }
       await File(zipPath).writeAsBytes(ZipEncoder().encode(archive));
+      return zipPath;
+    }
 
-      await setup.injectPortableConfigDirIntoZip(zipPath);
+    Archive readZip(String zipPath) =>
+        ZipDecoder().decodeBytes(File(zipPath).readAsBytesSync());
 
-      final decoded = ZipDecoder().decodeBytes(
-        await File(zipPath).readAsBytes(),
+    test('injects a config directory into a windows zip', () async {
+      final zipPath = await writeZip([
+        ArchiveFile.bytes('FlClash.exe', [1, 2, 3]),
+      ]);
+
+      await setup.injectPortableDirectoryIntoZip(zipPath);
+
+      final archive = readZip(zipPath);
+      expect(archive.find('config/'), isNotNull);
+      expect(archive.find('FlClash.exe'), isNotNull);
+    });
+
+    test('leaves a zip that already carries the directory alone', () async {
+      final zipPath = await writeZip([
+        ArchiveFile.directory('config/'),
+        ArchiveFile.bytes('FlClash.exe', [1, 2, 3]),
+      ]);
+
+      await setup.injectPortableDirectoryIntoZip(zipPath);
+
+      expect(
+        readZip(zipPath).where((file) => file.name == 'config/').length,
+        1,
       );
-      expect(decoded.where((f) => f.name == 'config/').length, 1);
     });
   });
 }
